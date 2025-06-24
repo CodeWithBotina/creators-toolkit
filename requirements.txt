@@ -1,0 +1,14 @@
+moviepy>=1.0.3,<2.0.0
+opencv-python-headless>=4.9.0.80,<5.0.0.0
+numpy>=1.26.0,<2.0.0
+rembg>=2.0.66,<2.1.0  # Adjusted to be compatible with available versions
+Pillow>=10.2.0,<11.0.0
+pydub>=0.25.1,<1.0.0
+noisereduce>=2.0.0,<3.0.0
+librosa>=0.10.1,<1.0.0
+soundfile>=0.12.1,<1.0.0
+webrtcvad>=2.0.10,<3.0.0
+speechrecognition>=3.10.0,<4.0.0
+CustomTkinter>=5.2.0,<6.0.0
+rich>=13.7.1,<14.0.0
+psutil>=5.9.8,<6.0.0
