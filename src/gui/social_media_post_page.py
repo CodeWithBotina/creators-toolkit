@@ -1,5 +1,5 @@
 import customtkinter
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, colorchooser # ADDED colorchooser
 import threading
 from pathlib import Path
 import logging
@@ -23,6 +23,8 @@ class SocialMediaPostPage(customtkinter.CTkFrame):
         self.config_manager = get_application_config()
         self.font_manager = get_application_font_manager()
         self.processor = SocialMediaVideoProcessor() # Instantiate the backend logic
+
+        self.app_instance = app_instance # Move this assignment to the top of __init__
 
         self.input_file_path = None
         self.output_file_path = None
@@ -321,7 +323,7 @@ class SocialMediaPostPage(customtkinter.CTkFrame):
         """Opens a color chooser dialog for font color."""
         current_color = self.config_manager.get_setting("processing_parameters.social_media_post_processing.default_subtitle_color", "#FFFFFF")
         initial_rgb = tuple(int(current_color[i:i+2], 16) for i in (1, 3, 5))
-        color_code = filedialog.askcolor(initialcolor=initial_rgb)
+        color_code = colorchooser.askcolor(initialcolor=initial_rgb) # Changed from filedialog
         if color_code[1]: # If a color was selected (not cancelled)
             selected_hex_color = color_code[1]
             self.config_manager.set_setting("processing_parameters.social_media_post_processing.default_subtitle_color", selected_hex_color)
@@ -335,7 +337,7 @@ class SocialMediaPostPage(customtkinter.CTkFrame):
         """Opens a color chooser dialog for stroke color."""
         current_color = self.config_manager.get_setting("processing_parameters.social_media_post_processing.default_subtitle_stroke_color", "#000000")
         initial_rgb = tuple(int(current_color[i:i+2], 16) for i in (1, 3, 5))
-        color_code = filedialog.askcolor(initialcolor=initial_rgb)
+        color_code = colorchooser.askcolor(initialcolor=initial_rgb) # Changed from filedialog
         if color_code[1]:
             selected_hex_color = color_code[1]
             self.config_manager.set_setting("processing_parameters.social_media_post_processing.default_subtitle_stroke_color", selected_hex_color)
@@ -628,7 +630,7 @@ class SocialMediaPostPage(customtkinter.CTkFrame):
         )
         self.processing_thread.start()
 
-    def _run_processing_task(self, input_path: Path, output_path: Path, options: Dict[str, Any]):
+    def _run_processing_task(self, input_path: Path, output_path: Path, options: dict[str, any]):
         """
         The actual social media video processing task to be run in a separate thread.
         Handles calling the SocialMediaVideoProcessor and updating the GUI with results.

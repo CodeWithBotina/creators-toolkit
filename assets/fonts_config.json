@@ -1,0 +1,35 @@
+{
+    "default_font_name": "Arial",
+    "available_fonts": [
+        {
+            "name": "Montserrat",
+            "style": "Regular",
+            "file_name": "Montserrat-Regular.ttf",
+            "download_url": "https://github.com/google/fonts/raw/main/ofl/montserrat/Montserrat-Regular.ttf"
+        },
+        {
+            "name": "Open Sans",
+            "style": "Regular",
+            "file_name": "OpenSans-Regular.ttf",
+            "download_url": "https://github.com/google/fonts/raw/main/ofl/opensans/OpenSans-Regular.ttf"
+        },
+        {
+            "name": "Roboto",
+            "style": "Regular",
+            "file_name": "Roboto-Regular.ttf",
+            "download_url": "https://github.com/google/fonts/raw/main/apache/roboto/Roboto-Regular.ttf"
+        },
+        {
+            "name": "Lato",
+            "style": "Regular",
+            "file_name": "Lato-Regular.ttf",
+            "download_url": "https://github.com/google/fonts/raw/main/ofl/lato/Lato-Regular.ttf"
+        },
+        {
+            "name": "Oswald",
+            "style": "Regular",
+            "file_name": "Oswald-Regular.ttf",
+            "download_url": "https://github.com/google/fonts/raw/main/ofl/oswald/Oswald-Regular.ttf"
+        }
+    ]
+}

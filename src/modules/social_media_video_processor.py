@@ -3,10 +3,14 @@ import shutil
 import subprocess
 import logging
 import cv2
+import json
 import numpy as np
 from pathlib import Path
-from moviepy.editor import VideoFileClip, AudioFileClip, CompositeVideoClip, TextClip, ImageClip
-from moviepy.video.fx.all import crop as moviepy_crop_fx, resize as moviepy_resize_fx, set_position
+from moviepy import VideoFileClip, AudioFileClip, CompositeVideoClip, TextClip, ImageClip
+# Corrected imports for MoviePy 2.x effects:
+from moviepy.video.fx.Crop import Crop as moviepy_crop_fx 
+from moviepy.video.fx.Resize import Resize as moviepy_resize_fx
+# set_position is a method of the clip, not an effect to be imported from fx
 from pydub import AudioSegment
 from pydub.silence import split_on_silence
 import speech_recognition as sr
@@ -324,7 +328,7 @@ class SocialMediaVideoProcessor:
         if not self.face_cascade:
             self.logger.warning("Face detection not available. Skipping intelligent cropping. Video will be center-cropped.")
             # Fallback to simple center crop if face detection is not available
-            return original_clip.fx(moviepy_resize_fx, width=original_clip.h * target_aspect_ratio).set_pos("center") # Resize to target width and center
+            return original_clip.fx(moviepy_resize_fx, width=original_clip.h * target_aspect_ratio).set_position("center") # Resize to target width and center
 
         # Determine target dimensions
         original_width, original_height = original_clip.w, original_clip.h
@@ -790,7 +794,8 @@ class SocialMediaVideoProcessor:
 
             # Step 1: Load original video and audio
             self._update_progress(1, "Loading video and preparing audio...")
-            original_clip = VideoFileClip(str(input_filepath), verbose=False)
+            # Removed verbose argument as it's not supported in MoviePy 2.x
+            original_clip = VideoFileClip(str(input_filepath)) 
             
             # Ensure FFmpeg has enough memory, if specific env variable needed
             # os.environ["IMAGEIO_FFMPEG_OPTIONS"] = "-threads 4 -f" # Example, typically not needed unless MoviePy struggles
@@ -878,9 +883,9 @@ class SocialMediaVideoProcessor:
             if output_filepath.exists():
                 try:
                     os.remove(output_filepath)
-                    self.logger.info(f"Cleaned up partial output file: {output_filepath}")
+                    self.logger.info(f"Cleaned up partial final output file: {output_filepath}")
                 except Exception as cleanup_e:
-                    self.logger.warning(f"Failed to clean up partial output file {output_filepath}: {cleanup_e}")
+                    self.logger.warning(f"Failed to clean up partial final output file {output_filepath}: {cleanup_e}")
             return False, f"An unexpected error occurred: {e}"
         finally:
             self._external_progress_callback = None # Clear callback

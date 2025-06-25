@@ -15,7 +15,8 @@ from src.gui.video_converter_page import VideoConverterPage
 from src.gui.audio_enhancement_page import AudioEnhancementPage
 from src.gui.image_tools_page import ImageToolsPage
 from src.gui.video_enhancement_page import VideoEnhancementPage
-from src.gui.video_bg_removal_page import VideoBgRemovalPage # NEW: Import the video background removal page
+from src.gui.video_bg_removal_page import VideoBgRemovalPage
+from src.gui.social_media_post_page import SocialMediaPostPage # NEW: Import the social media post page
 
 # --- Initialize Core Services ---
 # This must happen before any other module attempts to get a logger or config.
@@ -59,9 +60,9 @@ class App(customtkinter.CTk):
 
         # --- Sidebar Frame ---
         self.sidebar_frame = customtkinter.CTkFrame(self, width=140, corner_radius=0)
-        # Updated rowspan to account for the new "Video BG Removal" button + appearance controls
-        self.sidebar_frame.grid(row=0, column=0, rowspan=8, sticky="nsew") # Total rows used: 0-7, rowspan = 8
-        self.sidebar_frame.grid_rowconfigure(7, weight=1) # Makes the last row (below appearance mode) expand to push elements up
+        # Updated rowspan to account for the new "Social Media Post" button + appearance controls
+        self.sidebar_frame.grid(row=0, column=0, rowspan=9, sticky="nsew") # Total rows used: 0-8, rowspan = 9
+        self.sidebar_frame.grid_rowconfigure(8, weight=1) # Makes the last row (below appearance mode) expand to push elements up
 
         # Sidebar title
         self.logo_label = customtkinter.CTkLabel(self.sidebar_frame, text="Creator's Toolkit", font=customtkinter.CTkFont(size=20, weight="bold"))
@@ -74,24 +75,27 @@ class App(customtkinter.CTk):
         self.video_enhance_button = customtkinter.CTkButton(self.sidebar_frame, text="Video Enhancement", command=self.video_enhancement_button_event)
         self.video_enhance_button.grid(row=2, column=0, padx=20, pady=10)
 
-        self.video_bg_removal_button = customtkinter.CTkButton(self.sidebar_frame, text="Video BG Removal", command=self.video_bg_removal_button_event) # NEW button
-        self.video_bg_removal_button.grid(row=3, column=0, padx=20, pady=10) # NEW row
+        self.video_bg_removal_button = customtkinter.CTkButton(self.sidebar_frame, text="Video BG Removal", command=self.video_bg_removal_button_event)
+        self.video_bg_removal_button.grid(row=3, column=0, padx=20, pady=10)
+
+        self.social_media_post_button = customtkinter.CTkButton(self.sidebar_frame, text="Social Media Post", command=self.social_media_post_button_event) # NEW button
+        self.social_media_post_button.grid(row=4, column=0, padx=20, pady=10) # NEW row
 
         self.audio_button = customtkinter.CTkButton(self.sidebar_frame, text="Audio Enhancement", command=self.audio_button_event)
-        self.audio_button.grid(row=4, column=0, padx=20, pady=10) # Adjusted row
+        self.audio_button.grid(row=5, column=0, padx=20, pady=10) # Adjusted row
 
         self.image_button = customtkinter.CTkButton(self.sidebar_frame, text="Image Tools", command=self.image_button_event)
-        self.image_button.grid(row=5, column=0, padx=20, pady=10) # Adjusted row
+        self.image_button.grid(row=6, column=0, padx=20, pady=10) # Adjusted row
 
         self.history_button = customtkinter.CTkButton(self.sidebar_frame, text="History", command=self.history_button_event)
-        self.history_button.grid(row=6, column=0, padx=20, pady=10, sticky="n") # Adjusted row
+        self.history_button.grid(row=7, column=0, padx=20, pady=10, sticky="n") # Adjusted row
 
         # Appearance Mode Control
         self.appearance_mode_label = customtkinter.CTkLabel(self.sidebar_frame, text="Appearance Mode:")
-        self.appearance_mode_label.grid(row=7, column=0, padx=20, pady=(10, 0)) # Adjusted row
+        self.appearance_mode_label.grid(row=8, column=0, padx=20, pady=(10, 0)) # Adjusted row
         self.appearance_mode_optionemenu = customtkinter.CTkOptionMenu(self.sidebar_frame, values=["System", "Light", "Dark"],
                                                                        command=self.change_appearance_mode_event)
-        self.appearance_mode_optionemenu.grid(row=8, column=0, padx=20, pady=(10, 20)) # Adjusted row
+        self.appearance_mode_optionemenu.grid(row=9, column=0, padx=20, pady=(10, 20)) # Adjusted row
         self.appearance_mode_optionemenu.set(app_appearance_mode)
 
         # --- Main Content Frame Container ---
@@ -129,7 +133,8 @@ class App(customtkinter.CTk):
         """
         self.pages["video_converter"] = VideoConverterPage(self.main_content_container, self)
         self.pages["video_enhancement"] = VideoEnhancementPage(self.main_content_container, self)
-        self.pages["video_background_removal"] = VideoBgRemovalPage(self.main_content_container, self) # NEW: Video background removal page
+        self.pages["video_background_removal"] = VideoBgRemovalPage(self.main_content_container, self)
+        self.pages["social_media_post"] = SocialMediaPostPage(self.main_content_container, self) # NEW: Social media post page
         self.pages["audio_enhancement"] = AudioEnhancementPage(self.main_content_container, self)
         self.pages["image_tools"] = ImageToolsPage(self.main_content_container, self)
         # Future pages will be added here:
@@ -226,10 +231,15 @@ class App(customtkinter.CTk):
         self.set_status("Video Enhancement section selected.")
         self.logger.debug("Video Enhancement button clicked.")
 
-    def video_bg_removal_button_event(self): # NEW function
+    def video_bg_removal_button_event(self):
         self.show_page("video_background_removal")
         self.set_status("Video Background Removal section selected.")
         self.logger.debug("Video Background Removal button clicked.")
+
+    def social_media_post_button_event(self): # NEW function
+        self.show_page("social_media_post")
+        self.set_status("Social Media Post Creation section selected.")
+        self.logger.debug("Social Media Post button clicked.")
 
     def audio_button_event(self):
         self.show_page("audio_enhancement")
