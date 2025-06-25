@@ -332,67 +332,23 @@ class VideoBgRemovalPage(customtkinter.CTkFrame):
         Called on the main thread after processing completes.
         """
         if success:
-            messagebox.showinfo("Processing Success", f"Video background removed successfully!\nOutput: {message.split(': ')[-1]}")
-            self.logger.info(f"Video background removal UI completed successfully: {message}")
-            self.progress_label.configure(text="Processing Complete!")
-            self.progress_bar.set(1.0) # Ensure it shows 100%
+            self.app_instance.history_manager.log_task(
+                "Video Background Removal",
+                self.input_file_path,
+                self.output_file_path,
+                "Completed",
+                f"Video background removed successfully. Output saved to: {self.output_file_path.name}",
+                details={"background_mode": self.bg_mode_var.get(), "color": self.bg_color_entry.get()} # Example details
+            )
+            self.app_instance.set_status(f"Video background removal complete! Output saved to: {self.output_file_path.name}")
         else:
-            messagebox.showerror("Processing Failed", f"Video background removal failed:\n{message}")
-            self.logger.error(f"Video background removal UI failed: {message}")
-            self.progress_label.configure(text="Processing Failed!")
-            self.progress_bar.set(0) # Reset progress on failure
+            self.app_instance.history_manager.log_task(
+                "Video Background Removal",
+                self.input_file_path,
+                self.output_file_path,
+                "Failed",
+                f"Video background removal failed: {message}"
+            )
+            self.app_instance.set_status(f"Video background removal failed: {message}", level="error")
 
         self._update_ui_state(True) # Re-enable UI elements
-        self.app_instance.set_status(message, level="info" if success else "error")
-
-
-# This __main__ block is for isolated testing of the page itself, not the full app.
-if __name__ == "__main__":
-    import sys
-    # Add parent directory to path to allow imports from src.core and src.modules
-    sys.path.append(str(Path(__file__).parent.parent.parent))
-
-    # Initialize logger and config for standalone test
-    from src.core.logger import AppLogger
-    from src.core.config_manager import ConfigManager
-    # Ensure logs and config directories exist for this isolated test context
-    Path("../logs").mkdir(exist_ok=True)
-    Path("../config").mkdir(exist_ok=True)
-    AppLogger(log_dir="../logs", log_level=logging.DEBUG)
-    # Ensure theme is set to "dark-blue" in default_config here
-    ConfigManager(config_dir="../config") 
-    test_logger = get_application_logger()
-    test_logger.info("--- Starting VideoBgRemovalPage isolated test ---")
-
-
-    class DummyApp:
-        """A minimal mock for the main App class to satisfy VideoBgRemovalPage's dependency."""
-        def __init__(self):
-            self.logger = get_application_logger()
-        def set_status(self, message, level="info"):
-            self.logger.info(f"[DummyApp Status] {message}")
-            print(f"[DummyApp Status Bar]: {message}") # Print to console for test visibility
-
-    root = customtkinter.CTk()
-    root.title("Video Background Removal Page Test")
-    root.geometry("900x700") 
-    root.grid_columnconfigure(0, weight=1)
-    root.grid_rowconfigure(0, weight=1)
-
-    dummy_app = DummyApp()
-    bg_removal_page = VideoBgRemovalPage(root, dummy_app)
-    bg_removal_page.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
-
-    # Automatically set a dummy input file for easier testing if available
-    dummy_test_video = Path(__file__).parent.parent.parent / "test_media" / "test_video_for_bg_remove.mp4"
-    if dummy_test_video.exists():
-        bg_removal_page.input_file_path = dummy_test_video
-        bg_removal_page._update_entry_text(bg_removal_page.input_entry, str(dummy_test_video))
-        bg_removal_page._suggest_output_file_path()
-        bg_removal_page._update_ui_state(True) # Enable process button since input is set
-        test_logger.info(f"Pre-set dummy input video for testing: {dummy_test_video}")
-    else:
-        test_logger.warning(f"Dummy test video for background removal not found at {dummy_test_video}. Please create it or browse manually.")
-        
-    root.mainloop()
-    test_logger.info("--- VideoBgRemovalPage isolated test completed ---")

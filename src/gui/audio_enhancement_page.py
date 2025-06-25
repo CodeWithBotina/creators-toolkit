@@ -404,67 +404,23 @@ class AudioEnhancementPage(customtkinter.CTkFrame):
         Called on the main thread after processing completes.
         """
         if success:
-            messagebox.showinfo("Processing Success", f"Audio processed successfully!\nOutput: {message.split(': ')[-1]}")
-            self.logger.info(f"Audio processing UI completed successfully: {message}")
-            self.progress_label.configure(text="Processing Complete!")
-            self.progress_bar.set(1.0) # Ensure it shows 100%
+            self.app_instance.history_manager.log_task(
+                "Audio Enhancement",
+                self.input_file_path,
+                self.output_file_path,
+                "Completed",
+                f"Audio enhanced successfully. Output saved to: {self.output_file_path.name}",
+                details={"noise_reduction": self.noise_reduction_var.get(), "normalization": self.normalize_audio_var.get()} # Example details
+            )
+            self.app_instance.set_status(f"Audio enhancement complete! Output saved to: {self.output_file_path.name}")
         else:
-            messagebox.showerror("Processing Failed", f"Audio processing failed:\n{message}")
-            self.logger.error(f"Audio processing UI failed: {message}")
-            self.progress_label.configure(text="Processing Failed!")
-            self.progress_bar.set(0) # Reset progress on failure
+            self.app_instance.history_manager.log_task(
+                "Audio Enhancement",
+                self.input_file_path,
+                self.output_file_path,
+                "Failed",
+                f"Audio enhancement failed: {message}"
+            )
+            self.app_instance.set_status(f"Audio enhancement failed: {message}", level="error")
 
         self._update_ui_state(True) # Re-enable UI elements
-        self.app_instance.set_status(message, level="info" if success else "error")
-
-
-# This __main__ block is for isolated testing of the page itself, not the full app.
-if __name__ == "__main__":
-    import sys
-    # Add parent directory to path to allow imports from src.core and src.modules
-    sys.path.append(str(Path(__file__).parent.parent.parent))
-
-    # Initialize logger and config for standalone test
-    from src.core.logger import AppLogger
-    from src.core.config_manager import ConfigManager
-    # Ensure logs and config directories exist for this isolated test context
-    Path("../logs").mkdir(exist_ok=True)
-    Path("../config").mkdir(exist_ok=True)
-    AppLogger(log_dir="../logs", log_level=logging.DEBUG)
-    ConfigManager(config_dir="../config") # Ensure theme is set to "dark-blue" in default_config here
-    test_logger = get_application_logger()
-    test_logger.info("--- Starting AudioEnhancementPage isolated test ---")
-
-
-    class DummyApp:
-        """A minimal mock for the main App class to satisfy AudioEnhancementPage's dependency."""
-        def __init__(self):
-            self.logger = get_application_logger()
-        def set_status(self, message, level="info"):
-            self.logger.info(f"[DummyApp Status] {message}")
-            print(f"[DummyApp Status Bar]: {message}") # Print to console for test visibility
-
-    root = customtkinter.CTk()
-    root.title("Audio Enhancement Page Test")
-    root.geometry("900x700") # Increased size to accommodate new controls
-    root.grid_columnconfigure(0, weight=1)
-    root.grid_rowconfigure(0, weight=1)
-
-    dummy_app = DummyApp()
-    enhancement_page = AudioEnhancementPage(root, dummy_app)
-    enhancement_page.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
-
-    # Automatically set a dummy input file for easier testing if available
-    dummy_test_audio = Path(__file__).parent.parent.parent / "test_media" / "test_audio.wav"
-    if dummy_test_audio.exists():
-        enhancement_page.input_file_path = dummy_test_audio
-        enhancement_page._update_entry_text(enhancement_page.input_entry, str(dummy_test_audio))
-        enhancement_page._suggest_output_file_path()
-        enhancement_page._update_ui_state(True) # Enable process button since input is set
-        test_logger.info(f"Pre-set dummy input audio for testing: {dummy_test_audio}")
-    else:
-        test_logger.warning(f"Dummy test audio not found at {dummy_test_audio}. Please create it or browse manually.")
-        
-    root.mainloop()
-    test_logger.info("--- AudioEnhancementPage isolated test completed ---")
-

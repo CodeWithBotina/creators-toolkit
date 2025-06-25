@@ -15,9 +15,7 @@ class VideoConverterPage(customtkinter.CTkFrame):
     Allows users to select input/output files and start the conversion.
     """
     def __init__(self, master, app_instance):
-        print(f"DEBUG: VideoConverterPage __init__ called. Master type: {type(master)}, Master is None: {master is None}")
         super().__init__(master, fg_color="transparent")
-        print(f"DEBUG: After super().__init__. self.master type: {type(self.master)}, self.master is None: {self.master is None}")
         self.logger = get_application_logger()
         self.config_manager = get_application_config()
         self.app_instance = app_instance # Reference to the main App class for status updates
@@ -242,69 +240,20 @@ class VideoConverterPage(customtkinter.CTkFrame):
         Called on the main thread after conversion completes.
         """
         if success:
-            messagebox.showinfo("Conversion Success", f"Video converted successfully!\nOutput: {message.split(': ')[-1]}")
-            self.logger.info(f"Conversion UI completed successfully: {message}")
-            self.progress_label.configure(text="Conversion Complete!")
-            self.progress_bar.set(1.0) # Ensure it shows 100%
+            self.app_instance.history_manager.log_task(
+                "Video Conversion",
+                self.input_file_path,
+                self.output_file_path,
+                "Completed",
+                f"Conversion successful. Output saved to: {self.output_file_path.name}"
+            )
         else:
-            messagebox.showerror("Conversion Failed", f"Video conversion failed:\n{message}")
-            self.logger.error(f"Conversion UI failed: {message}")
-            self.progress_label.configure(text="Conversion Failed!")
-            self.progress_bar.set(0) # Reset progress on failure
-
+            self.app_instance.history_manager.log_task(
+                "Video Conversion",
+                self.input_file_path,
+                self.output_file_path, # Could be None if failed early
+                "Failed",
+                f"Conversion failed: {message}"
+            )
         self._update_ui_state(True) # Re-enable UI elements
         self.app_instance.set_status(message, level="info" if success else "error")
-
-
-# This __main__ block is for isolated testing of the page itself, not the full app.
-if __name__ == "__main__":
-    import sys
-    # Add parent directory to path to allow imports from src.core
-    sys.path.append(str(Path(__file__).parent.parent.parent))
-
-    # Initialize logger and config for standalone test
-    from src.core.logger import AppLogger
-    from src.core.config_manager import ConfigManager
-    # Ensure logs and config directories exist for this isolated test context
-    Path("../logs").mkdir(exist_ok=True)
-    Path("../config").mkdir(exist_ok=True)
-    AppLogger(log_dir="../logs", log_level=logging.DEBUG)
-    ConfigManager(config_dir="../config") # Ensure theme is set to "dark-blue" in default_config here
-    test_logger = get_application_logger()
-    test_logger.info("--- Starting VideoConverterPage isolated test ---")
-
-
-    class DummyApp:
-        """A minimal mock for the main App class to satisfy VideoConverterPage's dependency."""
-        def __init__(self):
-            self.logger = get_application_logger()
-        def set_status(self, message, level="info"):
-            self.logger.info(f"[DummyApp Status] {message}")
-            print(f"[DummyApp Status Bar]: {message}") # Print to console for test visibility
-
-    root = customtkinter.CTk()
-    root.title("Video Converter Page Test")
-    root.geometry("800x600")
-    root.grid_columnconfigure(0, weight=1)
-    root.grid_rowconfigure(0, weight=1)
-
-    dummy_app = DummyApp()
-    converter_page = VideoConverterPage(root, dummy_app)
-    converter_page.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
-
-    # Automatically set a dummy input file for easier testing if available
-    # You would need to manually create a "test_media" directory at the project root
-    # and put a video file named "test_video.mp4" inside for this to work.
-    # Otherwise, browse manually.
-    dummy_test_video = Path(__file__).parent.parent.parent / "test_media" / "test_video.mp4"
-    if dummy_test_video.exists():
-        converter_page.input_file_path = dummy_test_video
-        converter_page._update_entry_text(converter_page.input_entry, str(dummy_test_video))
-        converter_page._suggest_output_file_path()
-        converter_page._update_ui_state(True) # Enable convert button since input is set
-        test_logger.info(f"Pre-set dummy input video for testing: {dummy_test_video}")
-    else:
-        test_logger.warning(f"Dummy test video not found at {dummy_test_video}. Please browse manually.")
-
-    root.mainloop()
-    test_logger.info("--- VideoConverterPage isolated test completed ---")

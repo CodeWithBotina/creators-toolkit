@@ -91,20 +91,3 @@ def get_application_logger():
     Convenience function to get the global logger instance.
     """
     return app_logger_instance.get_logger()
-
-if __name__ == "__main__":
-    # Example Usage and Testing
-    logger = get_application_logger()
-
-    logger.debug("This is a DEBUG message.")
-    logger.info("This is an INFO message.")
-    logger.warning("This is a WARNING message.")
-    logger.error("This is an ERROR message.")
-    logger.critical("This is a CRITICAL message.")
-
-    logger.info("Testing log rotation: a new file should be created daily.")
-    logger.info(f"Log files are saved in: {os.path.abspath('logs')}")
-
-    # You can also get specific loggers for modules
-    module_logger = logging.getLogger("CreatorToolkit.VideoModule")
-    module_logger.info("Message from VideoModule.")
