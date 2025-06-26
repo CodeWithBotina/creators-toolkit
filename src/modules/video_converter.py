@@ -2,23 +2,15 @@ import os
 import shutil
 from pathlib import Path
 from moviepy import VideoFileClip
-# from moviepy.config import change_settings # This line is correctly commented out
+# from moviepy.config import change_settings # Removed: This import is causing the ImportError
 from src.core.logger import get_application_logger
 from src.core.config_manager import get_application_config
-import logging # Import logging directly for lower-level control if needed
-import subprocess # NEW: For potential use in testing dummy video creation
+import logging
+import subprocess # For creating dummy video in example usage
 
-# --- NEW DIAGNOSTIC LINES (KEEP THESE!) ---
-try:
-    import moviepy
-    print(f"DEBUG: MoviePy version being used: {moviepy.__version__}")
-    print(f"DEBUG: MoviePy loaded from: {moviepy.__file__}")
-except ImportError:
-    print("DEBUG: MoviePy module not found.")
-except AttributeError:
-    print("DEBUG: MoviePy found, but __version__ or __file__ attribute missing.")
-# --- END NEW DIAGNOSTIC LINES ---
-
+class VideoConverterError(Exception):
+    """Custom exception for video conversion errors."""
+    pass
 
 class VideoConverter:
     """
@@ -31,13 +23,10 @@ class VideoConverter:
         self._is_converting = False # Internal state to track if a conversion is in progress
         self._external_progress_callback = None # To store the callback from the GUI
 
-        # Ensure moviepy knows where ffmpeg is, based on potential future config setting
-        # For now, assumes ffmpeg is in PATH, but leaves room for configuration.
-        # if self.config.get_setting("ffmpeg_path"):
-        #    change_settings({"FFMPEG_BINARY": self.config.get_setting("ffmpeg_path")})
-        
-        # Suppress MoviePy's own excessive logging if not set via logger="bar"
-        # logging.getLogger('moviepy').setLevel(logging.ERROR) # Only if we don't pass 'logger' to write_videofile
+        # The FFmpeg binary path should be set as an environment variable (FFMPEG_BINARY)
+        # by the application's main entry point (main.py) before this module is imported.
+        # This ensures MoviePy finds the correct bundled FFmpeg executable.
+        self.logger.info("VideoConverter initialized. Assuming FFMPEG_BINARY environment variable is set.")
 
     def _moviepy_progress_wrapper(self, current_time, total_duration):
         """
@@ -51,9 +40,9 @@ class VideoConverter:
             else:
                 progress_percentage = 0 # Or a small initial value if duration is unknown
             
-            # Call the external callback on the main thread if it's a CustomTkinter widget method
-            # This is handled by the GUI side using .after()
-            self._external_progress_callback(progress_percentage)
+            # The actual GUI update needs to be scheduled on the main thread from the GUI page.
+            # This wrapper simply calculates and passes the value.
+            self._external_progress_callback(progress_percentage, f"Converting: {progress_percentage}%")
         self.logger.debug(f"MoviePy internal progress: {current_time:.2f}s / {total_duration:.2f}s")
 
 
@@ -65,12 +54,10 @@ class VideoConverter:
             input_filepath (Path): The path to the input video file.
             output_filepath (Path): The desired path for the output .mp4 file.
             delete_original (bool): If True, the original video file will be deleted after successful conversion.
-            progress_callback_func (callable, optional): A function to call with progress updates (0-100 integer).
-                                                        Signature: `progress_callback_func(progress_int: int)`
+            progress_callback_func (callable, optional): A function to call with progress updates (0-100 integer, message).
+                                                        Signature: `progress_callback_func(progress_int: int, message: str)`
         Returns:
             tuple: (bool, str) - True if successful, False otherwise, and a message.
-        Raises:
-            # Exceptions are now caught internally and returned as (False, message)
         """
         if self._is_converting:
             self.logger.warning("Attempted to start conversion while another is in progress.")
@@ -79,6 +66,7 @@ class VideoConverter:
         self._is_converting = True
         self._external_progress_callback = progress_callback_func
         self.logger.info(f"Attempting to convert '{input_filepath}' to '{output_filepath}'")
+        self._external_progress_callback(0, "Starting conversion...") # Initial progress update
 
         if not input_filepath.exists():
             self._is_converting = False
@@ -101,25 +89,22 @@ class VideoConverter:
         clip = None # Initialize clip to None
         try:
             self.logger.info(f"Trying to load video clip from: {input_filepath}")
+            self._external_progress_callback(10, "Loading video clip...")
             try:
+                # MoviePy implicitly uses the FFMPEG_BINARY environment variable set in main.py
                 clip = VideoFileClip(str(input_filepath))
                 self.logger.debug(f"Successfully loaded clip. Duration: {clip.duration}s, FPS: {clip.fps}, Size: {clip.size}")
             except Exception as e:
                 self.logger.error(f"Failed to load video clip from {input_filepath}: {e}", exc_info=True)
                 self._is_converting = False
-                return False, f"Failed to load video: {e}. Please ensure the file is a valid video and FFmpeg is correctly installed and accessible."
+                return False, f"Failed to load video: {e}. Please ensure the file is a valid video and FFmpeg is correctly installed and accessible via the 'FFMPEG_BINARY' environment variable."
 
             if clip.duration is None or clip.duration <= 0:
                 self.logger.warning(f"Clip duration is zero or unknown for {input_filepath}. This often indicates a corrupt or invalid video file.")
                 if self._external_progress_callback:
-                    self._external_progress_callback(0) # Report 0% as it's an invalid file
+                    self._external_progress_callback(0, "Error: Invalid video file.")
                 
-                # Check for 0 duration specifically from FFmpeg/MoviePy internal error
-                # Note: The exact error message might vary slightly depending on FFmpeg version and actual issue
-                if "video stream duration can not be less than 0" in str(e).lower() if 'e' in locals() else False:
-                    error_message = f"Video duration is zero or invalid for '{input_filepath}'. This typically means the video file is corrupted or not a recognized format for FFmpeg. Please try with a different video file."
-                else:
-                    error_message = f"Video duration is zero or unknown for '{input_filepath}'. Please check the video file for corruption or if FFmpeg is correctly installed."
+                error_message = f"Video duration is zero or invalid for '{input_filepath}'. This typically means the video file is corrupted or not a recognized format for FFmpeg. Please try with a different video file."
                 
                 if clip is not None: # Ensure clip is closed if it was partially created
                     clip.close()
@@ -130,6 +115,7 @@ class VideoConverter:
             # libx264 is a highly efficient H.264 video encoder for MP4.
             # aac is a common and good quality audio encoder for MP4.
             self.logger.info(f"Exporting to MP4 (codec: libx264, audio_codec: aac) as: {output_filepath}")
+            self._external_progress_callback(20, "Starting video encoding...")
             
             # Pass our internal wrapper to MoviePy's progress_callback
             clip.write_videofile(
@@ -137,8 +123,7 @@ class VideoConverter:
                 codec="libx264",
                 audio_codec="aac",
                 logger="bar",       # Show MoviePy's internal progress bar in console (useful for dev)
-                # verbose=False,      # THIS LINE HAS BEEN REMOVED AND SHOULD NOT BE HERE
-                # progress_callback=self._moviepy_progress_wrapper, # Direct reference to the wrapper <--- UNCOMMENTED!
+                progress_callback=self._moviepy_progress_wrapper,
                 preset="medium",     # Adjust for speed vs. quality: "ultrafast", "superfast", "fast", "medium" (default), "slow", "slower", "veryslow")
                 threads=os.cpu_count() # Utilize all available CPU cores for FFmpeg encoding
             )
@@ -147,7 +132,7 @@ class VideoConverter:
 
             # Ensure final progress update
             if self._external_progress_callback:
-                self._external_progress_callback(100) # Report 100% on success
+                self._external_progress_callback(100, "Conversion complete!") # Report 100% on success
 
             self.logger.info(f"Conversion completed successfully: {output_filepath}")
 

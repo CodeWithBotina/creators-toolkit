@@ -1,9 +1,10 @@
 import customtkinter
-from tkinter import filedialog, messagebox, colorchooser # ADDED colorchooser
+from tkinter import filedialog, messagebox
 import threading
 from pathlib import Path
 import logging
 import json # For handling overlay data
+from typing import Dict, Any, List, Optional # Import Dict, Any, List, Optional from typing
 
 # Import core and module components
 from src.core.logger import get_application_logger
@@ -21,33 +22,31 @@ class SocialMediaPostPage(customtkinter.CTkFrame):
         super().__init__(master, fg_color="transparent")
         self.logger = get_application_logger()
         self.config_manager = get_application_config()
-        self.font_manager = get_application_font_manager()
+        self.font_manager = get_application_font_manager() # For subtitle font list
+        self.app_instance = app_instance # Reference to the main App/MainWindow class for status updates
         self.processor = SocialMediaVideoProcessor() # Instantiate the backend logic
 
-        self.app_instance = app_instance # Move this assignment to the top of __init__
-
-        self.input_file_path = None
-        self.output_file_path = None
-        self.current_overlays = [] # List to store overlay items for the current session
+        self.input_file_path: Optional[Path] = None
+        self.output_file_path: Optional[Path] = None
+        self.current_overlays: List[Dict[str, Any]] = [] # List to store overlay items for the current session
 
         self.logger.info("Initializing SocialMediaPostPage UI.")
 
         # Configure grid layout for this page
         self.grid_columnconfigure(0, weight=1) # Main content column
-        self.grid_rowconfigure(0, weight=0)
+        self.grid_rowconfigure(0, weight=0) # Title
         self.grid_rowconfigure(1, weight=1) # Scrollable frame for parameters
         self.grid_rowconfigure(2, weight=0) # Progress and button row
 
         # Title
-        self.title_label = customtkinter.CTkLabel(self, text="Social Media Post Creator", font=customtkinter.CTkFont(size=24, weight="bold"))
+        self.title_label = customtkinter.CTkLabel(self, text="Social Media Video Processor", font=customtkinter.CTkFont(size=24, weight="bold"))
         self.title_label.grid(row=0, column=0, padx=20, pady=(20, 10), sticky="ew")
 
         # Scrollable Frame for Parameters (to handle many widgets)
         self.scrollable_frame = customtkinter.CTkScrollableFrame(self, fg_color="transparent")
         self.scrollable_frame.grid(row=1, column=0, padx=20, pady=10, sticky="nsew")
-        self.scrollable_frame.grid_columnconfigure(0, weight=0) # Labels
-        self.scrollable_frame.grid_columnconfigure(1, weight=1) # Entries/Controls
-        self.scrollable_frame.grid_columnconfigure(2, weight=0) # Buttons for browse/color
+        self.scrollable_frame.grid_columnconfigure((0, 2), weight=0) # Labels, buttons
+        self.scrollable_frame.grid_columnconfigure(1, weight=1) # Entry fields, sliders
 
         # --- Input/Output Section ---
         row_idx = 0
@@ -67,126 +66,172 @@ class SocialMediaPostPage(customtkinter.CTkFrame):
         self.output_button.grid(row=row_idx, column=2, padx=(10, 0), pady=10, sticky="e")
         row_idx += 1
 
-        # --- Subtitle Customization Section ---
-        self.subtitle_section_label = customtkinter.CTkLabel(self.scrollable_frame, text="Subtitle Settings", font=customtkinter.CTkFont(size=18, weight="bold"))
-        self.subtitle_section_label.grid(row=row_idx, column=0, columnspan=3, padx=0, pady=(30, 10), sticky="ew")
+        # --- Processing Parameters Section ---
+        self.params_label = customtkinter.CTkLabel(self.scrollable_frame, text="Processing Options", font=customtkinter.CTkFont(size=18, weight="bold"))
+        self.params_label.grid(row=row_idx, column=0, columnspan=3, padx=0, pady=(30, 10), sticky="ew")
         row_idx += 1
 
-        # Font Selection
-        self.font_label = customtkinter.CTkLabel(self.scrollable_frame, text="Font:")
-        self.font_label.grid(row=row_idx, column=0, padx=(0, 10), pady=5, sticky="w")
-        self.font_optionmenu = customtkinter.CTkOptionMenu(self.scrollable_frame, values=["Loading..."], command=self._update_subtitle_font)
-        self.font_optionmenu.grid(row=row_idx, column=1, padx=10, pady=5, sticky="ew")
-        self.download_font_button = customtkinter.CTkButton(self.scrollable_frame, text="Download Selected Font", command=self._download_selected_font)
-        self.download_font_button.grid(row=row_idx, column=2, padx=(10,0), pady=5, sticky="e")
-        row_idx += 1
-        # Populate fonts after UI is built
-        self.master.after(100, self._populate_font_options) # Schedule after init to allow CTk to be ready
-
-        # Font Size
-        self.font_size_label = customtkinter.CTkLabel(self.scrollable_frame, text="Font Size:")
-        self.font_size_label.grid(row=row_idx, column=0, padx=(0, 10), pady=5, sticky="w")
-        self.font_size_slider = customtkinter.CTkSlider(self.scrollable_frame, from_=20, to=100, number_of_steps=80, command=self._update_subtitle_font_size)
-        self.font_size_slider.grid(row=row_idx, column=1, padx=10, pady=5, sticky="ew")
-        self.font_size_value_label = customtkinter.CTkLabel(self.scrollable_frame, text="60")
-        self.font_size_value_label.grid(row=row_idx, column=2, padx=(10, 0), pady=5, sticky="e")
-        initial_font_size = self.config_manager.get_setting("processing_parameters.social_media_post_processing.default_subtitle_font_size", 60)
-        self.font_size_slider.set(initial_font_size)
-        self._update_subtitle_font_size(initial_font_size)
+        # Auto Crop Checkbox
+        self.auto_crop_checkbox = customtkinter.CTkCheckBox(self.scrollable_frame, text="Intelligent Auto-Crop (to vertical format)", command=self._update_config_setting("auto_crop"))
+        self.auto_crop_checkbox.grid(row=row_idx, column=0, columnspan=2, padx=0, pady=10, sticky="w")
+        if self.config_manager.get_setting("processing_parameters.social_media.auto_crop", True): self.auto_crop_checkbox.select()
+        else: self.auto_crop_checkbox.deselect()
         row_idx += 1
 
-        # Font Color
-        self.font_color_label = customtkinter.CTkLabel(self.scrollable_frame, text="Font Color:")
-        self.font_color_label.grid(row=row_idx, column=0, padx=(0, 10), pady=5, sticky="w")
-        self.font_color_display_frame = customtkinter.CTkFrame(self.scrollable_frame, width=80, height=24, corner_radius=5)
-        self.font_color_display_frame.grid(row=row_idx, column=1, padx=10, pady=5, sticky="w")
-        self.font_color_display_frame.grid_propagate(False)
-        self.pick_font_color_button = customtkinter.CTkButton(self.scrollable_frame, text="Pick Color", command=self._pick_subtitle_font_color)
-        self.pick_font_color_button.grid(row=row_idx, column=2, padx=(10, 0), pady=5, sticky="e")
-        initial_font_color = self.config_manager.get_setting("processing_parameters.social_media_post_processing.default_subtitle_color", "#FFFFFF")
-        self._update_color_display(self.font_color_display_frame, initial_font_color)
+        # Target Resolution Dropdown
+        self.target_res_label = customtkinter.CTkLabel(self.scrollable_frame, text="Target Resolution:")
+        self.target_res_label.grid(row=row_idx, column=0, padx=(0, 10), pady=5, sticky="w")
+        self.target_res_options = ["1080x1920 (Vertical)", "1920x1080 (Horizontal)", "1080x1080 (Square)", "720x1280 (Vertical HD)"]
+        self.target_res_combobox = customtkinter.CTkComboBox(self.scrollable_frame, values=self.target_res_options,
+                                                             command=self._update_target_resolution)
+        self.target_res_combobox.grid(row=row_idx, column=1, padx=10, pady=5, sticky="ew")
+        initial_target_res = self.config_manager.get_setting("processing_parameters.social_media.target_social_media_resolution", "1080x1920")
+        if "1920x1080" in initial_target_res:
+            self.target_res_combobox.set("1920x1080 (Horizontal)")
+        elif "1080x1080" in initial_target_res:
+            self.target_res_combobox.set("1080x1080 (Square)")
+        elif "720x1280" in initial_target_res:
+            self.target_res_combobox.set("720x1280 (Vertical HD)")
+        else:
+            self.target_res_combobox.set("1080x1920 (Vertical)")
         row_idx += 1
 
-        # Stroke Color
-        self.stroke_color_label = customtkinter.CTkLabel(self.scrollable_frame, text="Stroke Color:")
-        self.stroke_color_label.grid(row=row_idx, column=0, padx=(0, 10), pady=5, sticky="w")
-        self.stroke_color_display_frame = customtkinter.CTkFrame(self.scrollable_frame, width=80, height=24, corner_radius=5)
-        self.stroke_color_display_frame.grid(row=row_idx, column=1, padx=10, pady=5, sticky="w")
-        self.stroke_color_display_frame.grid_propagate(False)
-        self.pick_stroke_color_button = customtkinter.CTkButton(self.scrollable_frame, text="Pick Color", command=self._pick_subtitle_stroke_color)
-        self.pick_stroke_color_button.grid(row=row_idx, column=2, padx=(10, 0), pady=5, sticky="e")
-        initial_stroke_color = self.config_manager.get_setting("processing_parameters.social_media_post_processing.default_subtitle_stroke_color", "#000000")
-        self._update_color_display(self.stroke_color_display_frame, initial_stroke_color)
+        # --- Subtitle Options ---
+        self.subtitle_label_frame = customtkinter.CTkFrame(self.scrollable_frame, fg_color="transparent")
+        self.subtitle_label_frame.grid(row=row_idx, column=0, columnspan=3, padx=0, pady=(20, 10), sticky="ew")
+        self.subtitle_label_frame.grid_columnconfigure(0, weight=1)
+
+        self.generate_subtitles_checkbox = customtkinter.CTkCheckBox(self.subtitle_label_frame, text="Generate Subtitles (Vosk Offline ASR)", command=self._toggle_subtitle_options)
+        self.generate_subtitles_checkbox.grid(row=0, column=0, padx=0, pady=10, sticky="w")
+        if self.config_manager.get_setting("processing_parameters.social_media.generate_subtitles", True): self.generate_subtitles_checkbox.select()
+        else: self.generate_subtitles_checkbox.deselect()
+
+        row_idx += 1
+        # Subtitle Settings Container Frame
+        self.subtitle_settings_frame = customtkinter.CTkFrame(self.scrollable_frame, fg_color="transparent")
+        self.subtitle_settings_frame.grid(row=row_idx, column=0, columnspan=3, padx=20, pady=(0,10), sticky="ew")
+        self.subtitle_settings_frame.grid_columnconfigure(1, weight=1)
         row_idx += 1
 
-        # Stroke Width
-        self.stroke_width_label = customtkinter.CTkLabel(self.scrollable_frame, text="Stroke Width:")
-        self.stroke_width_label.grid(row=row_idx, column=0, padx=(0, 10), pady=5, sticky="w")
-        self.stroke_width_slider = customtkinter.CTkSlider(self.scrollable_frame, from_=0, to=5, number_of_steps=10, command=self._update_subtitle_stroke_width)
-        self.stroke_width_slider.grid(row=row_idx, column=1, padx=10, pady=5, sticky="ew")
-        self.stroke_width_value_label = customtkinter.CTkLabel(self.scrollable_frame, text="2")
-        self.stroke_width_value_label.grid(row=row_idx, column=2, padx=(10, 0), pady=5, sticky="e")
-        initial_stroke_width = self.config_manager.get_setting("processing_parameters.social_media_post_processing.default_subtitle_stroke_width", 2)
-        self.stroke_width_slider.set(initial_stroke_width)
-        self._update_subtitle_stroke_width(initial_stroke_width)
+        sub_row_idx = 0
+        self.subtitle_font_label = customtkinter.CTkLabel(self.subtitle_settings_frame, text="Font:")
+        self.subtitle_font_label.grid(row=sub_row_idx, column=0, padx=(0, 10), pady=5, sticky="w")
+        self.font_names = self.font_manager.get_available_font_names()
+        self.subtitle_font_combobox = customtkinter.CTkComboBox(self.subtitle_settings_frame, values=self.font_names,
+                                                                 command=self._update_config_setting_with_value("default_subtitle_font_name"))
+        self.subtitle_font_combobox.grid(row=sub_row_idx, column=1, padx=10, pady=5, sticky="ew")
+        initial_font = self.config_manager.get_setting("processing_parameters.social_media.default_subtitle_font_name", "Arial")
+        if initial_font in self.font_names:
+            self.subtitle_font_combobox.set(initial_font)
+        else:
+            self.subtitle_font_combobox.set("Arial") # Fallback
+        sub_row_idx += 1
+
+        self.subtitle_size_label = customtkinter.CTkLabel(self.subtitle_settings_frame, text="Font Size:")
+        self.subtitle_size_label.grid(row=sub_row_idx, column=0, padx=(0, 10), pady=5, sticky="w")
+        self.subtitle_size_entry = customtkinter.CTkEntry(self.subtitle_settings_frame, width=80)
+        self.subtitle_size_entry.grid(row=sub_row_idx, column=1, padx=10, pady=5, sticky="w")
+        initial_font_size = self.config_manager.get_setting("processing_parameters.social_media.subtitle_font_size", 40)
+        self.subtitle_size_entry.insert(0, str(initial_font_size))
+        self.subtitle_size_entry.bind("<FocusOut>", lambda e: self._update_numeric_config_setting("subtitle_font_size", int, e))
+        self.subtitle_size_entry.bind("<Return>", lambda e: self._update_numeric_config_setting("subtitle_font_size", int, e))
+        sub_row_idx += 1
+
+        self.subtitle_color_label = customtkinter.CTkLabel(self.subtitle_settings_frame, text="Font Color (Hex):")
+        self.subtitle_color_label.grid(row=sub_row_idx, column=0, padx=(0, 10), pady=5, sticky="w")
+        self.subtitle_color_entry = customtkinter.CTkEntry(self.subtitle_settings_frame, width=100)
+        self.subtitle_color_entry.grid(row=sub_row_idx, column=1, padx=10, pady=5, sticky="w")
+        initial_font_color = self.config_manager.get_setting("processing_parameters.social_media.subtitle_color", "#FFFFFF")
+        self.subtitle_color_entry.insert(0, initial_font_color)
+        self.subtitle_color_entry.bind("<FocusOut>", lambda e: self._update_config_setting_from_entry("subtitle_color", e))
+        self.subtitle_color_entry.bind("<Return>", lambda e: self._update_config_setting_from_entry("subtitle_color", e))
+        sub_row_idx += 1
+
+        self.subtitle_stroke_width_label = customtkinter.CTkLabel(self.subtitle_settings_frame, text="Stroke Width:")
+        self.subtitle_stroke_width_label.grid(row=sub_row_idx, column=0, padx=(0, 10), pady=5, sticky="w")
+        self.subtitle_stroke_width_entry = customtkinter.CTkEntry(self.subtitle_settings_frame, width=80)
+        self.subtitle_stroke_width_entry.grid(row=sub_row_idx, column=1, padx=10, pady=5, sticky="w")
+        initial_stroke_width = self.config_manager.get_setting("processing_parameters.social_media.subtitle_stroke_width", 2)
+        self.subtitle_stroke_width_entry.insert(0, str(initial_stroke_width))
+        self.subtitle_stroke_width_entry.bind("<FocusOut>", lambda e: self._update_numeric_config_setting("subtitle_stroke_width", int, e))
+        self.subtitle_stroke_width_entry.bind("<Return>", lambda e: self._update_numeric_config_setting("subtitle_stroke_width", int, e))
+        sub_row_idx += 1
+
+        self.subtitle_stroke_color_label = customtkinter.CTkLabel(self.subtitle_settings_frame, text="Stroke Color (Hex):")
+        self.subtitle_stroke_color_label.grid(row=sub_row_idx, column=0, padx=(0, 10), pady=5, sticky="w")
+        self.subtitle_stroke_color_entry = customtkinter.CTkEntry(self.subtitle_settings_frame, width=100)
+        self.subtitle_stroke_color_entry.grid(row=sub_row_idx, column=1, padx=10, pady=5, sticky="w")
+        initial_stroke_color = self.config_manager.get_setting("processing_parameters.social_media.subtitle_stroke_color", "#000000")
+        self.subtitle_stroke_color_entry.insert(0, initial_stroke_color)
+        self.subtitle_stroke_color_entry.bind("<FocusOut>", lambda e: self._update_config_setting_from_entry("subtitle_stroke_color", e))
+        self.subtitle_stroke_color_entry.bind("<Return>", lambda e: self._update_config_setting_from_entry("subtitle_stroke_color", e))
+        sub_row_idx += 1
+
+        self.subtitle_position_label = customtkinter.CTkLabel(self.subtitle_settings_frame, text="Vertical Position (% from top):")
+        self.subtitle_position_label.grid(row=sub_row_idx, column=0, padx=(0, 10), pady=5, sticky="w")
+        self.subtitle_position_slider = customtkinter.CTkSlider(self.subtitle_settings_frame, from_=0.0, to=1.0, number_of_steps=100,
+                                                                 command=self._update_subtitle_position)
+        self.subtitle_position_slider.grid(row=sub_row_idx, column=1, padx=10, pady=5, sticky="ew")
+        self.subtitle_position_value_label = customtkinter.CTkLabel(self.subtitle_settings_frame, text="85%")
+        self.subtitle_position_value_label.grid(row=sub_row_idx, column=2, padx=(10, 0), pady=5, sticky="e")
+        initial_position_y = self.config_manager.get_setting("processing_parameters.social_media.subtitle_font_position_y", 0.85)
+        self.subtitle_position_slider.set(initial_position_y)
+        self._update_subtitle_position(initial_position_y)
+        sub_row_idx += 1
+
+        self.subtitle_words_per_line_label = customtkinter.CTkLabel(self.subtitle_settings_frame, text="Words Per Line:")
+        self.subtitle_words_per_line_label.grid(row=sub_row_idx, column=0, padx=(0, 10), pady=5, sticky="w")
+        self.subtitle_words_per_line_entry = customtkinter.CTkEntry(self.subtitle_settings_frame, width=80)
+        self.subtitle_words_per_line_entry.grid(row=sub_row_idx, column=1, padx=10, pady=5, sticky="w")
+        initial_words_per_line = self.config_manager.get_setting("processing_parameters.social_media.subtitle_words_per_line", 5)
+        self.subtitle_words_per_line_entry.insert(0, str(initial_words_per_line))
+        self.subtitle_words_per_line_entry.bind("<FocusOut>", lambda e: self._update_numeric_config_setting("subtitle_words_per_line", int, e))
+        self.subtitle_words_per_line_entry.bind("<Return>", lambda e: self._update_numeric_config_setting("subtitle_words_per_line", int, e))
+        sub_row_idx += 1
+
+        self._toggle_subtitle_options() # Initial toggle based on config
+
+        # --- Audio & Video Enhancement Checkboxes ---
+        self.apply_video_enhancement_checkbox = customtkinter.CTkCheckBox(self.scrollable_frame, text="Apply Automatic Video Enhancement", command=self._update_config_setting("apply_auto_video_enhancement"))
+        self.apply_video_enhancement_checkbox.grid(row=row_idx, column=0, columnspan=2, padx=0, pady=10, sticky="w")
+        if self.config_manager.get_setting("processing_parameters.social_media.apply_auto_video_enhancement", True): self.apply_video_enhancement_checkbox.select()
+        else: self.apply_video_enhancement_checkbox.deselect()
         row_idx += 1
 
-        # Subtitle Position (Y)
-        self.subtitle_pos_label = customtkinter.CTkLabel(self.scrollable_frame, text="Subtitle Vertical Pos.:")
-        self.subtitle_pos_label.grid(row=row_idx, column=0, padx=(0, 10), pady=5, sticky="w")
-        self.subtitle_pos_slider = customtkinter.CTkSlider(self.scrollable_frame, from_=0.0, to=1.0, number_of_steps=100, command=self._update_subtitle_position_y)
-        self.subtitle_pos_slider.grid(row=row_idx, column=1, padx=10, pady=5, sticky="ew")
-        self.subtitle_pos_value_label = customtkinter.CTkLabel(self.scrollable_frame, text="0.8")
-        self.subtitle_pos_value_label.grid(row=row_idx, column=2, padx=(10, 0), pady=5, sticky="e")
-        initial_pos_y = self.config_manager.get_setting("processing_parameters.social_media_post_processing.default_subtitle_position_y", 0.8)
-        self.subtitle_pos_slider.set(initial_pos_y)
-        self._update_subtitle_position_y(initial_pos_y)
+        self.apply_audio_enhancement_checkbox = customtkinter.CTkCheckBox(self.scrollable_frame, text="Apply Automatic Audio Enhancement (Noise Reduction, Normalization)", command=self._update_config_setting("apply_auto_audio_enhancement"))
+        self.apply_audio_enhancement_checkbox.grid(row=row_idx, column=0, columnspan=2, padx=0, pady=10, sticky="w")
+        if self.config_manager.get_setting("processing_parameters.social_media.apply_auto_audio_enhancement", True): self.apply_audio_enhancement_checkbox.select()
+        else: self.apply_audio_enhancement_checkbox.deselect()
         row_idx += 1
 
-        # --- General Processing Options ---
-        self.general_options_label = customtkinter.CTkLabel(self.scrollable_frame, text="General Options", font=customtkinter.CTkFont(size=18, weight="bold"))
-        self.general_options_label.grid(row=row_idx, column=0, columnspan=3, padx=0, pady=(30, 10), sticky="ew")
+        # --- Overlays Section ---
+        self.overlays_label_frame = customtkinter.CTkFrame(self.scrollable_frame, fg_color="transparent")
+        self.overlays_label_frame.grid(row=row_idx, column=0, columnspan=3, padx=0, pady=(20, 10), sticky="ew")
+        self.overlays_label_frame.grid_columnconfigure(0, weight=1)
+        self.overlays_label = customtkinter.CTkLabel(self.overlays_label_frame, text="Overlays", font=customtkinter.CTkFont(size=18, weight="bold"))
+        self.overlays_label.grid(row=0, column=0, padx=0, pady=0, sticky="w")
         row_idx += 1
 
-        self.remove_silent_checkbox = customtkinter.CTkCheckBox(self.scrollable_frame, text="Automatically remove silent segments", command=self._update_remove_silent_setting)
-        self.remove_silent_checkbox.grid(row=row_idx, column=0, columnspan=3, padx=(0,10), pady=5, sticky="w")
-        initial_remove_silent = self.config_manager.get_setting("processing_parameters.social_media_post_processing.auto_remove_silent_segments", True)
-        if initial_remove_silent: self.remove_silent_checkbox.select()
-        else: self.remove_silent_checkbox.deselect()
+        self.add_text_overlay_button = customtkinter.CTkButton(self.scrollable_frame, text="Add Text Overlay", command=self._add_text_overlay)
+        self.add_text_overlay_button.grid(row=row_idx, column=0, padx=0, pady=5, sticky="w")
+        self.add_image_overlay_button = customtkinter.CTkButton(self.scrollable_frame, text="Add Image Overlay", command=self._add_image_overlay)
+        self.add_image_overlay_button.grid(row=row_idx, column=1, padx=10, pady=5, sticky="w")
         row_idx += 1
 
-        self.delete_original_checkbox = customtkinter.CTkCheckBox(self.scrollable_frame, text="Delete original file after successful processing", command=self._update_delete_original_setting)
-        self.delete_original_checkbox.grid(row=row_idx, column=0, columnspan=3, padx=(0,10), pady=5, sticky="w")
-        initial_delete_original = self.config_manager.get_setting("processing_parameters.social_media_post_processing.delete_original_after_processing", False)
-        if initial_delete_original: self.delete_original_checkbox.select()
+        self.overlays_display_frame = customtkinter.CTkScrollableFrame(self.scrollable_frame, fg_color="transparent", height=150)
+        self.overlays_display_frame.grid(row=row_idx, column=0, columnspan=3, padx=0, pady=10, sticky="ew")
+        self.overlays_display_frame.grid_columnconfigure(0, weight=1)
+        row_idx += 1
+        
+        self._refresh_overlays_display() # Display any existing overlays (from config or session)
+
+        # Delete Original Checkbox
+        self.delete_original_checkbox = customtkinter.CTkCheckBox(self.scrollable_frame, text="Delete original file after successful processing", command=self._update_config_setting("delete_original_after_processing"))
+        self.delete_original_checkbox.grid(row=row_idx, column=0, columnspan=3, padx=0, pady=10, sticky="w")
+        if self.config_manager.get_setting("processing_parameters.social_media.delete_original_after_processing", False): self.delete_original_checkbox.select()
         else: self.delete_original_checkbox.deselect()
         row_idx += 1
-        
-        # --- Overlays Section ---
-        self.overlays_section_label = customtkinter.CTkLabel(self.scrollable_frame, text="Overlays (Images, Text, Audio)", font=customtkinter.CTkFont(size=18, weight="bold"))
-        self.overlays_section_label.grid(row=row_idx, column=0, columnspan=3, padx=0, pady=(30, 10), sticky="ew")
-        row_idx += 1
 
-        self.overlay_listbox = customtkinter.CTkScrollableFrame(self.scrollable_frame, label_text="Current Overlays", height=150)
-        self.overlay_listbox.grid(row=row_idx, column=0, columnspan=3, padx=(0,10), pady=10, sticky="ew")
-        self.overlay_listbox.grid_columnconfigure(0, weight=1)
-        self._populate_overlay_listbox() # Initial population
-        row_idx += 1
-
-        self.add_overlay_frame = customtkinter.CTkFrame(self.scrollable_frame, fg_color="transparent")
-        self.add_overlay_frame.grid(row=row_idx, column=0, columnspan=3, padx=0, pady=5, sticky="ew")
-        self.add_overlay_frame.grid_columnconfigure((0,1,2,3), weight=1)
-
-        self.add_image_button = customtkinter.CTkButton(self.add_overlay_frame, text="Add Image", command=self._add_image_overlay)
-        self.add_image_button.grid(row=0, column=0, padx=(0,5), pady=5, sticky="ew")
-        self.add_text_button = customtkinter.CTkButton(self.add_overlay_frame, text="Add Text", command=self._add_text_overlay)
-        self.add_text_button.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
-        self.add_audio_button = customtkinter.CTkButton(self.add_overlay_frame, text="Add Audio", command=self._add_audio_overlay)
-        self.add_audio_button.grid(row=0, column=2, padx=5, pady=5, sticky="ew")
-        self.remove_overlay_button = customtkinter.CTkButton(self.add_overlay_frame, text="Remove Selected", command=self._remove_selected_overlay)
-        self.remove_overlay_button.grid(row=0, column=3, padx=(5,0), pady=5, sticky="ew")
-        row_idx += 1
-        
         # --- Global Progress Bar and Button ---
         # These are outside the scrollable frame
         self.progress_label = customtkinter.CTkLabel(self, text="Progress: 0%")
@@ -195,7 +240,7 @@ class SocialMediaPostPage(customtkinter.CTkFrame):
         self.progress_bar.grid(row=3, column=0, padx=20, pady=(0, 20), sticky="ew")
         self.progress_bar.set(0)
 
-        self.process_button = customtkinter.CTkButton(self, text="Start Creating Post", command=self._start_processing)
+        self.process_button = customtkinter.CTkButton(self, text="Start Processing", command=self._start_processing)
         self.process_button.grid(row=4, column=0, padx=20, pady=20, sticky="ew")
 
         self._update_ui_state(False) # Initial state: disable process button until files are chosen
@@ -233,7 +278,7 @@ class SocialMediaPostPage(customtkinter.CTkFrame):
             default_output_dir = Path(default_output_dir_str)
             default_output_dir.mkdir(parents=True, exist_ok=True) # Ensure default output dir exists
 
-            output_file_name = f"{self.input_file_path.stem}_social_post.mp4" # Default to MP4 for compatibility
+            output_file_name = f"{self.input_file_path.stem}_social.mp4" # Default to MP4
             self.output_file_path = default_output_dir / output_file_name
 
             self._update_entry_text(self.output_entry, str(self.output_file_path))
@@ -250,14 +295,14 @@ class SocialMediaPostPage(customtkinter.CTkFrame):
             return
 
         initial_dir = self.config_manager.get_setting("output_directories.default_video_output")
-        initial_filename = f"{self.input_file_path.stem}_social_post.mp4"
+        initial_filename = f"{self.input_file_path.stem}_social.mp4"
 
         file_path_str = filedialog.asksaveasfilename(
-            title="Save Social Media Post As",
+            title="Save Processed Video As",
             initialdir=initial_dir,
             initialfile=initial_filename,
             filetypes=[("MP4 files", "*.mp4"), ("All files", "*.*")], # Suggest MP4 by default
-            defaultextension=".mp4" 
+            defaultextension=".mp4"
         )
         if file_path_str:
             self.output_file_path = Path(file_path_str)
@@ -273,276 +318,189 @@ class SocialMediaPostPage(customtkinter.CTkFrame):
             self.logger.info("Output video file selection cancelled.")
             self.app_instance.set_status("Output video file selection cancelled.")
 
-    # --- Subtitle Settings Callbacks ---
-    def _populate_font_options(self):
-        """Populates the font selection dropdown with available fonts."""
-        fonts = ["System Font"] + self.font_manager.get_available_font_names() # Add a generic system font option
-        self.font_optionmenu.configure(values=fonts)
-        
-        # Set default font from config
-        default_font_name = self.config_manager.get_setting("processing_parameters.social_media_post_processing.default_subtitle_font_name", "Arial")
-        if default_font_name in fonts:
-            self.font_optionmenu.set(default_font_name)
-        else:
-            self.font_optionmenu.set("Arial") # Fallback to a common default
-        self.logger.debug(f"Font options populated. Default: {self.font_optionmenu.get()}")
+    def _update_config_setting(self, setting_key: str):
+        """Returns a callable to update a boolean config setting based on checkbox state."""
+        def callback():
+            is_checked = getattr(self, f"{setting_key}_checkbox").get() == 1
+            self.config_manager.set_setting(f"processing_parameters.social_media.{setting_key}", is_checked)
+            self.logger.debug(f"Config setting '{setting_key}' updated to: {is_checked}")
+            self.app_instance.set_status(f"{setting_key.replace('_', ' ').title()}: {is_checked}")
+            # Special handling for subtitle options visibility
+            if setting_key == "generate_subtitles":
+                self._toggle_subtitle_options()
+        return callback
 
-    def _update_subtitle_font(self, selected_font: str):
-        """Updates the default subtitle font in configuration."""
-        self.config_manager.set_setting("processing_parameters.social_media_post_processing.default_subtitle_font_name", selected_font)
-        self.logger.debug(f"Subtitle font set to: {selected_font}")
-        self.app_instance.set_status(f"Subtitle font: {selected_font}")
+    def _update_config_setting_with_value(self, setting_key: str):
+        """Returns a callable to update a config setting with a combobox value."""
+        def callback(value: str):
+            self.config_manager.set_setting(f"processing_parameters.social_media.{setting_key}", value)
+            self.logger.debug(f"Config setting '{setting_key}' updated to: {value}")
+            self.app_instance.set_status(f"{setting_key.replace('_', ' ').title()}: {value}")
+        return callback
+    
+    def _update_numeric_config_setting(self, setting_key: str, value_type: type, event=None):
+        """Updates a numeric config setting from an entry widget."""
+        entry_widget = getattr(self, f"{setting_key}_entry")
+        try:
+            value = value_type(entry_widget.get())
+            if value_type == int and value < 0:
+                raise ValueError("Value must be non-negative.")
+            self.config_manager.set_setting(f"processing_parameters.social_media.{setting_key}", value)
+            self.logger.debug(f"Config setting '{setting_key}' updated to: {value}")
+            self.app_instance.set_status(f"{setting_key.replace('_', ' ').title()}: {value}")
+        except ValueError:
+            messagebox.showerror("Input Error", f"Invalid input for {setting_key.replace('_', ' ')}. Please enter a valid {value_type.__name__}.")
+            entry_widget.delete(0, customtkinter.END)
+            entry_widget.insert(0, str(self.config_manager.get_setting(f"processing_parameters.social_media.{setting_key}")))
+            self.logger.warning(f"Invalid input for {setting_key}.")
+            self.app_instance.set_status(f"Invalid {setting_key.replace('_', ' ')}.", level="warning")
 
-    def _download_selected_font(self):
-        """Attempts to download the currently selected font."""
-        selected_font_name = self.font_optionmenu.get()
-        if selected_font_name == "System Font":
-            messagebox.showinfo("Font Info", "No custom font selected for download. 'System Font' uses a font available on your operating system.")
-            return
+    def _update_config_setting_from_entry(self, setting_key: str, event=None):
+        """Updates a string config setting from an entry widget (e.g., color hex)."""
+        entry_widget = getattr(self, f"{setting_key}_entry")
+        value = entry_widget.get()
+        self.config_manager.set_setting(f"processing_parameters.social_media.{setting_key}", value)
+        self.logger.debug(f"Config setting '{setting_key}' updated to: {value}")
+        self.app_instance.set_status(f"{setting_key.replace('_', ' ').title()}: {value}")
 
-        self.app_instance.set_status(f"Attempting to download {selected_font_name}...", level="info")
-        self.logger.info(f"User requested download of font: {selected_font_name}")
-        # FontManager's get_font_path handles the download if not local
-        font_path = self.font_manager.get_font_path(selected_font_name)
-        if font_path and font_path.exists():
-            messagebox.showinfo("Download Complete", f"Font '{selected_font_name}' is now available at:\n{font_path}")
-            self.app_instance.set_status(f"Font '{selected_font_name}' downloaded.", level="info")
-        else:
-            messagebox.showerror("Download Failed", f"Could not download font '{selected_font_name}'. Check logs for details.")
-            self.app_instance.set_status(f"Font '{selected_font_name}' download failed.", level="error")
+    def _update_target_resolution(self, selected_option: str):
+        """Updates the target social media resolution in config."""
+        resolution_map = {
+            "1080x1920 (Vertical)": "1080x1920",
+            "1920x1080 (Horizontal)": "1920x1080",
+            "1080x1080 (Square)": "1080x1080",
+            "720x1280 (Vertical HD)": "720x1280"
+        }
+        actual_resolution = resolution_map.get(selected_option, "1080x1920")
+        self.config_manager.set_setting("processing_parameters.social_media.target_social_media_resolution", actual_resolution)
+        self.logger.debug(f"Target resolution set to: {actual_resolution}")
+        self.app_instance.set_status(f"Target Resolution: {selected_option}")
 
-    def _update_subtitle_font_size(self, value):
-        """Updates the subtitle font size display and config."""
-        rounded_value = int(value)
-        self.font_size_value_label.configure(text=str(rounded_value))
-        self.config_manager.set_setting("processing_parameters.social_media_post_processing.default_subtitle_font_size", rounded_value)
-        self.logger.debug(f"Subtitle font size set to: {rounded_value}")
-        self.app_instance.set_status(f"Subtitle size: {rounded_value}")
 
-    def _pick_subtitle_font_color(self):
-        """Opens a color chooser dialog for font color."""
-        current_color = self.config_manager.get_setting("processing_parameters.social_media_post_processing.default_subtitle_color", "#FFFFFF")
-        initial_rgb = tuple(int(current_color[i:i+2], 16) for i in (1, 3, 5))
-        color_code = colorchooser.askcolor(initialcolor=initial_rgb) # Changed from filedialog
-        if color_code[1]: # If a color was selected (not cancelled)
-            selected_hex_color = color_code[1]
-            self.config_manager.set_setting("processing_parameters.social_media_post_processing.default_subtitle_color", selected_hex_color)
-            self._update_color_display(self.font_color_display_frame, selected_hex_color)
-            self.logger.info(f"Subtitle font color updated to: {selected_hex_color}")
-            self.app_instance.set_status(f"Font color: {selected_hex_color}")
-        else:
-            self.logger.info("Subtitle font color selection cancelled.")
-
-    def _pick_subtitle_stroke_color(self):
-        """Opens a color chooser dialog for stroke color."""
-        current_color = self.config_manager.get_setting("processing_parameters.social_media_post_processing.default_subtitle_stroke_color", "#000000")
-        initial_rgb = tuple(int(current_color[i:i+2], 16) for i in (1, 3, 5))
-        color_code = colorchooser.askcolor(initialcolor=initial_rgb) # Changed from filedialog
-        if color_code[1]:
-            selected_hex_color = color_code[1]
-            self.config_manager.set_setting("processing_parameters.social_media_post_processing.default_subtitle_stroke_color", selected_hex_color)
-            self._update_color_display(self.stroke_color_display_frame, selected_hex_color)
-            self.logger.info(f"Subtitle stroke color updated to: {selected_hex_color}")
-            self.app_instance.set_status(f"Stroke color: {selected_hex_color}")
-        else:
-            self.logger.info("Subtitle stroke color selection cancelled.")
-
-    def _update_subtitle_stroke_width(self, value):
-        """Updates the subtitle stroke width display and config."""
-        rounded_value = int(value)
-        self.stroke_width_value_label.configure(text=str(rounded_value))
-        self.config_manager.set_setting("processing_parameters.social_media_post_processing.default_subtitle_stroke_width", rounded_value)
-        self.logger.debug(f"Subtitle stroke width set to: {rounded_value}")
-        self.app_instance.set_status(f"Stroke width: {rounded_value}")
-
-    def _update_subtitle_position_y(self, value):
+    def _update_subtitle_position(self, value: float):
         """Updates the subtitle vertical position display and config."""
         rounded_value = round(value, 2)
-        self.subtitle_pos_value_label.configure(text=f"{rounded_value:.2f}")
-        self.config_manager.set_setting("processing_parameters.social_media_post_processing.default_subtitle_position_y", rounded_value)
-        self.logger.debug(f"Subtitle vertical position set to: {rounded_value}")
-        self.app_instance.set_status(f"Subtitle Y-pos: {rounded_value}")
+        self.subtitle_position_value_label.configure(text=f"{int(rounded_value * 100)}%")
+        self.config_manager.set_setting("processing_parameters.social_media.subtitle_font_position_y", rounded_value)
+        self.logger.debug(f"Subtitle position set to: {rounded_value}")
+        self.app_instance.set_status(f"Subtitle Position: {int(rounded_value * 100)}%")
 
-    def _update_color_display(self, frame_widget, hex_color: str):
-        """Updates the background color of a display frame."""
-        frame_widget.configure(fg_color=hex_color)
+    def _toggle_subtitle_options(self):
+        """Toggles the visibility and state of subtitle-related controls."""
+        is_checked = self.generate_subtitles_checkbox.get() == 1
+        widgets = [
+            self.subtitle_font_label, self.subtitle_font_combobox,
+            self.subtitle_size_label, self.subtitle_size_entry,
+            self.subtitle_color_label, self.subtitle_color_entry,
+            self.subtitle_stroke_width_label, self.subtitle_stroke_width_entry,
+            self.subtitle_stroke_color_label, self.subtitle_stroke_color_entry,
+            self.subtitle_position_label, self.subtitle_position_slider, self.subtitle_position_value_label,
+            self.subtitle_words_per_line_label, self.subtitle_words_per_line_entry
+        ]
+        
+        for widget in widgets:
+            if is_checked:
+                widget.grid()
+                if isinstance(widget, (customtkinter.CTkEntry, customtkinter.CTkComboBox, customtkinter.CTkSlider)):
+                    widget.configure(state="normal")
+            else:
+                widget.grid_remove()
+                if isinstance(widget, (customtkinter.CTkEntry, customtkinter.CTkComboBox, customtkinter.CTkSlider)):
+                    widget.configure(state="disabled")
+        
+        # Also update config for 'generate_subtitles' as this is the primary toggle
+        self.config_manager.set_setting("processing_parameters.social_media.generate_subtitles", is_checked)
+        self.logger.info(f"Generate subtitles setting updated to: {is_checked}. Subtitle options visibility toggled.")
 
-    # --- General Options Callbacks ---
-    def _update_remove_silent_setting(self):
-        """Updates the 'auto_remove_silent_segments' setting in the config."""
-        is_checked = self.remove_silent_checkbox.get() == 1
-        self.config_manager.set_setting("processing_parameters.social_media_post_processing.auto_remove_silent_segments", is_checked)
-        self.logger.info(f"Auto remove silent segments setting updated to: {is_checked}")
-        self.app_instance.set_status(f"Remove silent segments: {is_checked}")
 
-    def _update_delete_original_setting(self):
-        """Updates the 'delete_original_after_processing' setting in the config."""
-        is_checked = self.delete_original_checkbox.get() == 1
-        self.config_manager.set_setting("processing_parameters.social_media_post_processing.delete_original_after_processing", is_checked)
-        self.logger.info(f"Delete original (social media) setting updated to: {is_checked}")
-        self.app_instance.set_status(f"Delete original (social media): {is_checked}")
+    # --- Overlay Management ---
+    def _add_text_overlay(self):
+        """Opens a dialog to add a new text overlay."""
+        dialog = customtkinter.CTkInputDialog(text="Enter text for overlay:", title="Add Text Overlay")
+        text_input = dialog.get_input()
+        if text_input:
+            # For simplicity, default values for new overlays. User can't edit position/duration in this simple dialog.
+            # A more advanced UI would allow full editing of overlay properties.
+            new_overlay = {
+                "type": "text",
+                "text": text_input,
+                "font_size": 50,
+                "color": "#FFFFFF",
+                "font_name": "Arial", # Could be configurable
+                "stroke_color": "#000000",
+                "stroke_width": 2,
+                "position_x": "center",
+                "position_y": "center",
+                "start_time": 0, # Default to start of video
+                "end_time": 99999 # Default to end of video (large number)
+            }
+            self.current_overlays.append(new_overlay)
+            self.logger.info(f"Added text overlay: '{text_input}'")
+            self.app_instance.set_status(f"Text overlay added: '{text_input}'")
+            self._refresh_overlays_display()
+        else:
+            self.logger.info("Adding text overlay cancelled.")
 
-    # --- Overlay Management Callbacks ---
-    def _populate_overlay_listbox(self):
-        """Populates the overlay listbox with current overlays."""
-        # Clear existing labels
-        for widget in self.overlay_listbox.winfo_children():
+    def _add_image_overlay(self):
+        """Opens a file dialog to select an image for overlay."""
+        filetypes = [("Image files", "*.png *.jpg *.jpeg *.gif"),
+                     ("All files", "*.*")]
+        image_path_str = filedialog.askopenfilename(title="Select Image for Overlay", filetypes=filetypes)
+        if image_path_str:
+            new_overlay = {
+                "type": "image",
+                "image_path": image_path_str,
+                "height": 100, # Default height, can be configurable
+                "position_x": "center",
+                "position_y": "center",
+                "start_time": 0, # Default to start of video
+                "end_time": 99999 # Default to end of video (large number)
+            }
+            self.current_overlays.append(new_overlay)
+            self.logger.info(f"Added image overlay: '{image_path_str}'")
+            self.app_instance.set_status(f"Image overlay added: '{Path(image_path_str).name}'")
+            self._refresh_overlays_display()
+        else:
+            self.logger.info("Adding image overlay cancelled.")
+
+    def _remove_overlay(self, index: int):
+        """Removes an overlay from the list by index."""
+        if 0 <= index < len(self.current_overlays):
+            removed_overlay = self.current_overlays.pop(index)
+            self.logger.info(f"Removed overlay at index {index}: {removed_overlay.get('text') or removed_overlay.get('image_path')}")
+            self.app_instance.set_status("Overlay removed.")
+            self._refresh_overlays_display()
+        else:
+            self.logger.warning(f"Attempted to remove non-existent overlay at index {index}.")
+
+    def _refresh_overlays_display(self):
+        """Clears and re-populates the overlays display frame."""
+        for widget in self.overlays_display_frame.winfo_children():
             widget.destroy()
 
         if not self.current_overlays:
-            customtkinter.CTkLabel(self.overlay_listbox, text="No overlays added yet.").grid(row=0, column=0, padx=10, pady=5, sticky="w")
+            no_overlays_label = customtkinter.CTkLabel(self.overlays_display_frame, text="No overlays added yet.")
+            no_overlays_label.grid(row=0, column=0, padx=10, pady=10, sticky="w")
             return
 
-        for i, overlay_item in enumerate(self.current_overlays):
-            item_type = overlay_item['type'].capitalize()
-            item_text = ""
-            if item_type == "Image":
-                item_text = f"{item_type}: {Path(overlay_item['path']).name}"
-            elif item_type == "Text":
-                item_text = f"{item_type}: \"{overlay_item['text'][:30]}...\""
-            elif item_type == "Audio":
-                item_text = f"{item_type}: {Path(overlay_item['path']).name}"
+        for i, overlay in enumerate(self.current_overlays):
+            overlay_frame = customtkinter.CTkFrame(self.overlays_display_frame)
+            overlay_frame.grid(row=i, column=0, padx=5, pady=5, sticky="ew")
+            overlay_frame.grid_columnconfigure(0, weight=1) # Description
+            overlay_frame.grid_columnconfigure(1, weight=0) # Remove button
+
+            display_text = ""
+            if overlay["type"] == "text":
+                display_text = f"Text: '{overlay['text']}'"
+            elif overlay["type"] == "image":
+                display_text = f"Image: '{Path(overlay['image_path']).name}'"
             
-            display_text = f"[{i+1}] {item_text} ({overlay_item.get('start',0):.1f}s - {overlay_item.get('end', 'End'):.1f}s)"
-            
-            # Use a button or clickable label to allow selection/editing
-            item_button = customtkinter.CTkButton(self.overlay_listbox, text=display_text, 
-                                                  command=lambda idx=i: self._select_overlay_for_editing(idx),
-                                                  fg_color="transparent", text_color_disabled="gray",
-                                                  hover_color=customtkinter.ThemeManager.theme["CTkButton"]["hover_color"])
-            item_button.grid(row=i, column=0, padx=5, pady=2, sticky="ew")
-        self.overlay_listbox.update_idletasks() # Refresh scrollable frame
+            overlay_label = customtkinter.CTkLabel(overlay_frame, text=display_text, wraplength=300)
+            overlay_label.grid(row=0, column=0, padx=5, pady=5, sticky="w")
 
-    def _select_overlay_for_editing(self, index: int):
-        """Selects an overlay in the listbox and can potentially open an edit dialog."""
-        self.logger.info(f"Overlay {index} selected for editing: {self.current_overlays[index]}")
-        messagebox.showinfo("Edit Overlay", f"Editing functionality for overlay '{self.current_overlays[index]['type']}' not yet implemented in detail. Displaying info:\n\n{json.dumps(self.current_overlays[index], indent=2)}")
-        # Future: Open a new CTkTopLevel window for editing overlay properties
+            remove_button = customtkinter.CTkButton(overlay_frame, text="X", width=30, height=24, fg_color="red", hover_color="darkred", command=lambda idx=i: self._remove_overlay(idx))
+            remove_button.grid(row=0, column=1, padx=5, pady=5, sticky="e")
 
-    def _add_image_overlay(self):
-        """Opens a dialog to add an image overlay."""
-        filetypes = [("Image files", "*.png *.jpg *.jpeg *.webp"), ("All files", "*.*")]
-        img_path_str = filedialog.askopenfilename(title="Select Image Overlay", filetypes=filetypes)
-        if img_path_str:
-            # Prompt for start/end time and optional scale/position
-            # For simplicity, we'll use a basic input for now, but a custom dialog would be better.
-            start_time_str = customtkinter.CTkInputDialog(text="Enter start time (seconds):", title="Overlay Start Time").get_input()
-            end_time_str = customtkinter.CTkInputDialog(text="Enter end time (seconds) (leave empty for end of video):", title="Overlay End Time").get_input()
-            
-            try:
-                start = float(start_time_str)
-                end = float(end_time_str) if end_time_str else None
-                if end is not None and end <= start:
-                    raise ValueError("End time must be greater than start time.")
-            except (ValueError, TypeError):
-                messagebox.showerror("Input Error", "Invalid start/end time. Please enter numbers.")
-                self.logger.warning("Invalid time input for image overlay.")
-                return
-
-            overlay_item = {
-                'type': 'image',
-                'path': img_path_str,
-                'start': start,
-                'end': end,
-                'position': ('center', 'center'), # Default position
-                'scale': 0.3 # Default scale
-            }
-            self.current_overlays.append(overlay_item)
-            self._populate_overlay_listbox()
-            self.logger.info(f"Added image overlay: {overlay_item}")
-            self.app_instance.set_status("Image overlay added.")
-        else:
-            self.logger.info("Image overlay selection cancelled.")
-
-    def _add_text_overlay(self):
-        """Opens a dialog to add a text overlay."""
-        text = customtkinter.CTkInputDialog(text="Enter text for overlay:", title="Text Overlay Content").get_input()
-        if not text:
-            self.logger.info("Text overlay creation cancelled (no text entered).")
-            return
-
-        start_time_str = customtkinter.CTkInputDialog(text="Enter start time (seconds):", title="Overlay Start Time").get_input()
-        end_time_str = customtkinter.CTkInputDialog(text="Enter end time (seconds) (leave empty for end of video):", title="Overlay End Time").get_input()
-
-        try:
-            start = float(start_time_str)
-            end = float(end_time_str) if end_time_str else None
-            if end is not None and end <= start:
-                raise ValueError("End time must be greater than start time.")
-        except (ValueError, TypeError):
-            messagebox.showerror("Input Error", "Invalid start/end time. Please enter numbers.")
-            self.logger.warning("Invalid time input for text overlay.")
-            return
-
-        overlay_item = {
-            'type': 'text',
-            'text': text,
-            'start': start,
-            'end': end,
-            'font_name': self.config_manager.get_setting("processing_parameters.social_media_post_processing.default_subtitle_font_name"),
-            'font_size': self.config_manager.get_setting("processing_parameters.social_media_post_processing.default_subtitle_font_size"),
-            'color': self.config_manager.get_setting("processing_parameters.social_media_post_processing.default_subtitle_color"),
-            'position': ('center', 'center') # Default position
-        }
-        self.current_overlays.append(overlay_item)
-        self._populate_overlay_listbox()
-        self.logger.info(f"Added text overlay: {overlay_item}")
-        self.app_instance.set_status("Text overlay added.")
-
-    def _add_audio_overlay(self):
-        """Opens a dialog to add an audio overlay."""
-        filetypes = [("Audio files", "*.mp3 *.wav *.aac *.flac"), ("All files", "*.*")]
-        audio_path_str = filedialog.askopenfilename(title="Select Audio Overlay", filetypes=filetypes)
-        if audio_path_str:
-            start_time_str = customtkinter.CTkInputDialog(text="Enter start time (seconds):", title="Overlay Start Time").get_input()
-            volume_str = customtkinter.CTkInputDialog(text="Enter volume (0.0 to 1.0, 1.0 for original):", title="Audio Volume").get_input()
-            
-            try:
-                start = float(start_time_str)
-                volume = float(volume_str) if volume_str else 1.0
-                if not (0.0 <= volume <= 1.0):
-                    raise ValueError("Volume must be between 0.0 and 1.0.")
-            except (ValueError, TypeError):
-                messagebox.showerror("Input Error", "Invalid start time or volume. Please enter numbers.")
-                self.logger.warning("Invalid time/volume input for audio overlay.")
-                return
-
-            overlay_item = {
-                'type': 'audio',
-                'path': audio_path_str,
-                'start': start,
-                'volume': volume
-            }
-            self.current_overlays.append(overlay_item)
-            self._populate_overlay_listbox()
-            self.logger.info(f"Added audio overlay: {overlay_item}")
-            self.app_instance.set_status("Audio overlay added.")
-        else:
-            self.logger.info("Audio overlay selection cancelled.")
-
-    def _remove_selected_overlay(self):
-        """Removes the selected overlay from the list."""
-        # CTkScrollableFrame does not have a direct selection method like Listbox.
-        # This requires iterating through its children and determining which one was last clicked,
-        # or implementing a custom selection logic.
-        # For simplicity, we'll use a basic prompt based on index for now.
-        if not self.current_overlays:
-            messagebox.showinfo("No Overlays", "There are no overlays to remove.")
-            return
-
-        index_str = customtkinter.CTkInputDialog(text="Enter the number of the overlay to remove (e.g., 1 for the first):", title="Remove Overlay").get_input()
-        try:
-            index_to_remove = int(index_str) - 1 # Convert to 0-based index
-            if 0 <= index_to_remove < len(self.current_overlays):
-                removed_item = self.current_overlays.pop(index_to_remove)
-                self._populate_overlay_listbox()
-                self.logger.info(f"Removed overlay: {removed_item}")
-                self.app_instance.set_status(f"Overlay {index_to_remove + 1} removed.")
-            else:
-                messagebox.showwarning("Invalid Index", "Invalid overlay number.")
-        except (ValueError, TypeError):
-            messagebox.showerror("Input Error", "Please enter a valid number.")
-        
     # --- Progress and UI State ---
     def _update_progress_bar(self, progress_percentage: int, message: str):
         """
@@ -558,7 +516,7 @@ class SocialMediaPostPage(customtkinter.CTkFrame):
         """Actual GUI update function, called via master.after. Runs on main thread."""
         self.progress_bar.set(progress_percentage / 100.0) # CTkProgressBar expects float from 0.0 to 1.0
         self.progress_label.configure(text=f"Progress: {progress_percentage}% - {message}")
-        self.app_instance.set_status(f"Processing post: {progress_percentage}% - {message}")
+        self.app_instance.set_status(f"Social Media Processing: {progress_percentage}% - {message}")
         self.master.update_idletasks() # Force GUI update
 
     def _update_ui_state(self, enable_process_button: bool):
@@ -572,19 +530,32 @@ class SocialMediaPostPage(customtkinter.CTkFrame):
         browse_state = "disabled" if is_processing else "normal"
         self.input_button.configure(state=browse_state)
         self.output_button.configure(state=browse_state)
-        self.font_optionmenu.configure(state=browse_state)
-        self.download_font_button.configure(state=browse_state)
-        self.font_size_slider.configure(state=browse_state)
-        self.pick_font_color_button.configure(state=browse_state)
-        self.pick_stroke_color_button.configure(state=browse_state)
-        self.stroke_width_slider.configure(state=browse_state)
-        self.subtitle_pos_slider.configure(state=browse_state)
-        self.remove_silent_checkbox.configure(state=browse_state)
+        self.auto_crop_checkbox.configure(state=browse_state)
+        self.target_res_combobox.configure(state=browse_state)
+        self.generate_subtitles_checkbox.configure(state=browse_state)
+        self.apply_video_enhancement_checkbox.configure(state=browse_state)
+        self.apply_audio_enhancement_checkbox.configure(state=browse_state)
+        self.add_text_overlay_button.configure(state=browse_state)
+        self.add_image_overlay_button.configure(state=browse_state)
         self.delete_original_checkbox.configure(state=browse_state)
-        self.add_image_button.configure(state=browse_state)
-        self.add_text_button.configure(state=browse_state)
-        self.add_audio_button.configure(state=browse_state)
-        self.remove_overlay_button.configure(state=browse_state)
+
+        # Disable/enable individual subtitle controls based on generate_subtitles_checkbox state
+        # and overall processing state
+        subtitle_widgets = [
+            self.subtitle_font_combobox, self.subtitle_size_entry, self.subtitle_color_entry,
+            self.subtitle_stroke_width_entry, self.subtitle_stroke_color_entry,
+            self.subtitle_position_slider, self.subtitle_words_per_line_entry
+        ]
+        
+        sub_controls_state = "normal" if self.generate_subtitles_checkbox.get() == 1 and not is_processing else "disabled"
+        for widget in subtitle_widgets:
+            widget.configure(state=sub_controls_state)
+        
+        # Overlays remove buttons
+        for child_frame in self.overlays_display_frame.winfo_children():
+            remove_btn = child_frame.grid_slaves(column=1, row=0) # Get the 'X' button
+            if remove_btn:
+                remove_btn[0].configure(state=browse_state)
 
 
     def _start_processing(self):
@@ -594,35 +565,46 @@ class SocialMediaPostPage(customtkinter.CTkFrame):
         """
         if not self.input_file_path or not self.input_file_path.is_file():
             messagebox.showerror("Input Error", "Please select a valid input video file.")
-            self.logger.warning("Post creation attempt failed: No valid input file selected.")
-            self.app_instance.set_status("Creation failed: No input.", level="warning")
+            self.logger.warning("Processing attempt failed: No valid input file selected.")
+            self.app_instance.set_status("Processing failed: No input.", level="warning")
             return
 
         if not self.output_file_path:
             messagebox.showerror("Output Error", "Please specify an output video file path.")
-            self.logger.warning("Post creation attempt failed: No output file specified.")
-            self.app_instance.set_status("Creation failed: No output path.", level="warning")
+            self.logger.warning("Processing attempt failed: No output file specified.")
+            self.app_instance.set_status("Processing failed: No output path.", level="warning")
             return
 
         if self.processor.is_processing():
-            self.app_instance.set_status("Video post creation already in progress.", level="warning")
+            self.app_instance.set_status("Social media video processing already in progress.", level="warning")
             return
 
         self._update_ui_state(False) # Disable UI during processing
         self.progress_bar.set(0)
         self.progress_label.configure(text="Progress: 0%")
-        self.app_instance.set_status("Video post creation started...", level="info")
-        self.logger.info("Social media video post creation initiated via GUI.")
+        self.app_instance.set_status("Social media video processing started...", level="info")
+        self.logger.info("Social media video processing initiated via GUI.")
 
-        # Prepare processing options for the backend processor
+        # Gather all processing options from UI and config
         processing_options = {
-            'auto_remove_silent_segments': self.remove_silent_checkbox.get() == 1,
-            'delete_original_after_processing': self.delete_original_checkbox.get() == 1,
-            'overlay_items': self.current_overlays, # Pass the list of configured overlays
-            # Additional options from config for backend processing, e.g., enhancement strengths
-            # The processor will fetch its own config values, but explicit overrides could be passed here.
+            "auto_crop": self.auto_crop_checkbox.get() == 1,
+            "target_social_media_resolution": self.config_manager.get_setting("processing_parameters.social_media.target_social_media_resolution"),
+            "generate_subtitles": self.generate_subtitles_checkbox.get() == 1,
+            "subtitle_font_size": int(self.subtitle_size_entry.get()),
+            "default_subtitle_font_name": self.subtitle_font_combobox.get(),
+            "subtitle_color": self.subtitle_color_entry.get(),
+            "subtitle_stroke_width": int(self.subtitle_stroke_width_entry.get()),
+            "subtitle_stroke_color": self.subtitle_stroke_color_entry.get(),
+            "subtitle_font_position_y": self.subtitle_position_slider.get(),
+            "subtitle_words_per_line": int(self.subtitle_words_per_line_entry.get()),
+            "apply_auto_video_enhancement": self.apply_video_enhancement_checkbox.get() == 1,
+            "apply_auto_audio_enhancement": self.apply_audio_enhancement_checkbox.get() == 1,
+            "overlays": self.current_overlays, # Pass the list of overlays
+            "delete_original_after_processing": self.delete_original_checkbox.get() == 1
+            # Other audio enhancement parameters for AudioProcessor are read directly from its config path
+            # via AudioProcessor itself, as we're reusing it.
         }
-
+        
         # Run processing in a separate thread
         self.processing_thread = threading.Thread(
             target=self._run_processing_task,
@@ -630,45 +612,59 @@ class SocialMediaPostPage(customtkinter.CTkFrame):
         )
         self.processing_thread.start()
 
-    def _run_processing_task(self, input_path: Path, output_path: Path, options: dict[str, any]):
+    def _run_processing_task(self, input_path: Path, output_path: Path, processing_options: Dict[str, Any]):
         """
         The actual social media video processing task to be run in a separate thread.
         Handles calling the SocialMediaVideoProcessor and updating the GUI with results.
         """
-        success, message = self.processor.process_video_for_social_media(
+        success, message = self.processor.process_social_media_video(
             input_filepath=input_path,
             output_filepath=output_path,
-            processing_options=options,
+            processing_options=processing_options,
             progress_callback_func=self._update_progress_bar # Pass our GUI update method
         )
 
         # After processing (success or failure), schedule result handling on the main thread
         if self.master:
-            self.master.after(0, self._handle_processing_result, success, message)
+            self.master.after(0, self._handle_processing_result, success, message, processing_options)
         else:
             self.logger.error("Master is None during _run_processing_task completion. Cannot update GUI.")
 
-    def _handle_processing_result(self, success: bool, message: str):
+    def _handle_processing_result(self, success: bool, message: str, processing_options: Dict[str, Any]):
         """
         Handles the result of the social media video processing, updating status and re-enabling UI.
         Called on the main thread after processing completes.
         """
         if success:
+            messagebox.showinfo("Processing Success", f"Social media video processed successfully!\nOutput: {message.split(': ')[-1]}")
+            self.logger.info(f"Social media video processing UI completed successfully: {message}")
+            self.progress_label.configure(text="Processing Complete!")
+            self.progress_bar.set(1.0) # Ensure it shows 100%
+            
+            # Log to history
             self.app_instance.history_manager.log_task(
-                "Video Conversion",
+                "Social Media Post Creation",
                 self.input_file_path,
                 self.output_file_path,
                 "Completed",
-                f"Conversion successful. Output saved to: {self.output_file_path.name}"
+                message,
+                processing_options # Log all processing options used
             )
-            self.app_instance.set_status(f"Conversion complete! Output saved to: {self.output_file_path.name}")
         else:
+            messagebox.showerror("Processing Failed", f"Social media post creation failed:\n{message}")
+            self.logger.error(f"Social media video processing UI failed: {message}")
+            self.progress_label.configure(text="Processing Failed!")
+            self.progress_bar.set(0) # Reset progress on failure
+
+            # Log to history
             self.app_instance.history_manager.log_task(
-                "Video Conversion",
+                "Social Media Post Creation",
                 self.input_file_path,
-                self.output_file_path, # May be None if conversion failed early
+                self.output_file_path,
                 "Failed",
-                f"Conversion failed: {message}"
+                message,
+                processing_options # Log all processing options used
             )
-            self.app_instance.set_status(f"Video conversion failed: {message}", level="error")
+
         self._update_ui_state(True) # Re-enable UI elements
+        self.app_instance.set_status(message, level="info" if success else "error")

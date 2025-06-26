@@ -3,7 +3,6 @@ from tkinter import messagebox
 from pathlib import Path
 import logging
 from typing import List, Dict, Any, Optional
-from datetime import datetime # Import datetime for formatting timestamps
 
 from src.core.logger import get_application_logger
 from src.modules.history_manager import get_application_history_manager # Import history manager
@@ -31,98 +30,111 @@ class HistoryPage(customtkinter.CTkFrame):
         self.title_label = customtkinter.CTkLabel(self, text="Processing History", font=customtkinter.CTkFont(size=24, weight="bold"))
         self.title_label.grid(row=0, column=0, padx=20, pady=(20, 10), sticky="ew")
 
-        # Scrollable Frame for History Entries
-        self.history_scroll_frame = customtkinter.CTkScrollableFrame(self, fg_color="transparent", label_text="Past Operations")
+        # Scrollable frame for history entries
+        self.history_scroll_frame = customtkinter.CTkScrollableFrame(self, fg_color="transparent")
         self.history_scroll_frame.grid(row=1, column=0, padx=20, pady=10, sticky="nsew")
-        self.history_scroll_frame.grid_columnconfigure(0, weight=1) # For history entry labels
+        self.history_scroll_frame.grid_columnconfigure(0, weight=1) # Column for history entries
 
-        # Control Buttons
-        self.button_frame = customtkinter.CTkFrame(self, fg_color="transparent")
-        self.button_frame.grid(row=2, column=0, padx=20, pady=(10, 20), sticky="ew")
-        self.button_frame.grid_columnconfigure((0, 1), weight=1)
+        # Buttons Frame
+        self.buttons_frame = customtkinter.CTkFrame(self, fg_color="transparent")
+        self.buttons_frame.grid(row=2, column=0, padx=20, pady=(10, 20), sticky="ew")
+        self.buttons_frame.grid_columnconfigure((0, 1), weight=1) # Two columns for buttons
 
-        self.refresh_button = customtkinter.CTkButton(self.button_frame, text="Refresh History", command=self._display_history)
-        self.refresh_button.grid(row=0, column=0, padx=(0, 10), pady=5, sticky="ew")
+        self.refresh_button = customtkinter.CTkButton(self.buttons_frame, text="Refresh History", command=self.refresh_page_content)
+        self.refresh_button.grid(row=0, column=0, padx=(0, 10), pady=0, sticky="w")
 
-        self.clear_button = customtkinter.CTkButton(self.button_frame, text="Clear History", command=self._clear_history_gui)
-        self.clear_button.grid(row=0, column=1, padx=(10, 0), pady=5, sticky="ew")
+        self.clear_button = customtkinter.CTkButton(self.buttons_frame, text="Clear All History", command=self._confirm_clear_history)
+        self.clear_button.grid(row=0, column=1, padx=(10, 0), pady=0, sticky="e")
 
-        self._display_history() # Initial display of history
+        self.refresh_page_content() # Initial display of history
 
-    def _display_history(self) -> None:
+    def refresh_page_content(self):
         """
-        Fetches history from HistoryManager and displays it in the scrollable frame.
+        Refreshes the history display by clearing existing entries and loading current history.
+        This method is called when the page is shown or the refresh button is pressed.
         """
         self.logger.info("Refreshing history display.")
-        
-        # Clear existing entries in the scrollable frame
+        self._display_history()
+        self.app_instance.set_status("History refreshed.")
+
+    def _display_history(self):
+        """
+        Loads history from the HistoryManager and displays it in the scrollable frame.
+        Clears previous entries before displaying new ones.
+        """
+        # Clear existing entries
         for widget in self.history_scroll_frame.winfo_children():
             widget.destroy()
 
         history_entries = self.history_manager.get_history()
 
         if not history_entries:
-            empty_label = customtkinter.CTkLabel(self.history_scroll_frame, text="No processing history found yet.", text_color="gray")
-            empty_label.grid(row=0, column=0, padx=10, pady=10, sticky="w")
-            self.app_instance.set_status("History is empty.")
+            no_history_label = customtkinter.CTkLabel(self.history_scroll_frame, text="No processing history available yet.")
+            no_history_label.grid(row=0, column=0, padx=10, pady=10, sticky="w")
+            self.logger.info("No history entries found to display.")
             return
 
-        for i, entry in enumerate(history_entries):
-            timestamp_dt = datetime.fromisoformat(entry['timestamp'])
-            formatted_timestamp = timestamp_dt.strftime("%Y-%m-%d %H:%M:%S")
-
-            task_type = entry.get('task_type', 'N/A')
-            status = entry.get('status', 'Unknown')
-            message = entry.get('message', 'No message.')
-            input_file_name = Path(entry.get('input_file', 'N/A')).name
-            output_file_name = Path(entry.get('output_file', 'N/A')).name if entry.get('output_file') else "N/A"
-            details = entry.get('details', {})
-
-            status_color = "green" if status == "Completed" else "red" if status == "Failed" else "orange"
-
-            # Create a frame for each history entry for better organization
-            entry_frame = customtkinter.CTkFrame(self.history_scroll_frame, fg_color="gray20", corner_radius=8)
+        # Display entries in reverse chronological order (newest first)
+        for i, entry in enumerate(reversed(history_entries)):
+            entry_frame = customtkinter.CTkFrame(self.history_scroll_frame, fg_color=("gray90", "gray15"), corner_radius=8)
             entry_frame.grid(row=i, column=0, padx=10, pady=5, sticky="ew")
-            entry_frame.grid_columnconfigure(0, weight=1) # Label column
-            entry_frame.grid_columnconfigure(1, weight=3) # Value column
+            entry_frame.grid_columnconfigure(0, weight=1) # For text content
 
-            # Row for Timestamp and Task Type
-            customtkinter.CTkLabel(entry_frame, text="Timestamp:", font=customtkinter.CTkFont(weight="bold")).grid(row=0, column=0, padx=10, pady=2, sticky="w")
-            customtkinter.CTkLabel(entry_frame, text=formatted_timestamp).grid(row=0, column=1, padx=10, pady=2, sticky="w")
+            # Prepare display text
+            timestamp = entry.get("timestamp", "N/A")
+            task_type = entry.get("task_type", "Unknown Task")
+            status = entry.get("status", "N/A")
+            message = entry.get("message", "No detailed message.")
             
-            customtkinter.CTkLabel(entry_frame, text="Task Type:", font=customtkinter.CTkFont(weight="bold")).grid(row=1, column=0, padx=10, pady=2, sticky="w")
-            customtkinter.CTkLabel(entry_frame, text=task_type).grid(row=1, column=1, padx=10, pady=2, sticky="w")
-
-            # Row for Status
-            customtkinter.CTkLabel(entry_frame, text="Status:", font=customtkinter.CTkFont(weight="bold")).grid(row=2, column=0, padx=10, pady=2, sticky="w")
-            customtkinter.CTkLabel(entry_frame, text=status, text_color=status_color, font=customtkinter.CTkFont(weight="bold")).grid(row=2, column=1, padx=10, pady=2, sticky="w")
-
-            # Row for Input File
-            customtkinter.CTkLabel(entry_frame, text="Input File:", font=customtkinter.CTkFont(weight="bold")).grid(row=3, column=0, padx=10, pady=2, sticky="w")
-            customtkinter.CTkLabel(entry_frame, text=input_file_name, wraplength=400).grid(row=3, column=1, padx=10, pady=2, sticky="w")
-
-            # Row for Output File
-            customtkinter.CTkLabel(entry_frame, text="Output File:", font=customtkinter.CTkFont(weight="bold")).grid(row=4, column=0, padx=10, pady=2, sticky="w")
-            customtkinter.CTkLabel(entry_frame, text=output_file_name, wraplength=400).grid(row=4, column=1, padx=10, pady=2, sticky="w")
+            input_file = Path(entry.get("input_file", "N/A")).name if entry.get("input_file") else "N/A"
+            output_file = Path(entry.get("output_file", "N/A")).name if entry.get("output_file") else "N/A"
             
-            # Row for Message
-            customtkinter.CTkLabel(entry_frame, text="Message:", font=customtkinter.CTkFont(weight="bold")).grid(row=5, column=0, padx=10, pady=2, sticky="w")
-            customtkinter.CTkLabel(entry_frame, text=message, wraplength=400).grid(row=5, column=1, padx=10, pady=2, sticky="w")
+            details = entry.get("details", {})
+            details_str = json.dumps(details, indent=2) if details else "No additional details."
 
-            # Row for Details (if any)
-            if details:
-                customtkinter.CTkLabel(entry_frame, text="Details:", font=customtkinter.CTkFont(weight="bold")).grid(row=6, column=0, padx=10, pady=2, sticky="w")
-                details_text = "\n".join([f"- {k}: {v}" for k, v in details.items()])
-                customtkinter.CTkLabel(entry_frame, text=details_text, wraplength=400).grid(row=6, column=1, padx=10, pady=2, sticky="w")
+            display_text = (
+                f"Timestamp: {timestamp}\n"
+                f"Task Type: {task_type}\n"
+                f"Status: {status}\n"
+                f"Input: {input_file}\n"
+                f"Output: {output_file}\n"
+                f"Message: {message}\n"
+                f"Details: {details_str}"
+            )
+            
+            entry_label = customtkinter.CTkLabel(entry_frame, text=display_text, justify="left", wraplength=self.winfo_width() - 80) # Adjust wraplength
+            entry_label.grid(row=0, column=0, padx=15, pady=10, sticky="ew")
+            
+            self.logger.debug(f"Displayed history entry: {task_type} - {status} at {timestamp}")
 
-        self.app_instance.set_status(f"History refreshed. {len(history_entries)} entries displayed.")
-        self.logger.debug("History display updated successfully.")
+        # Ensure the scrollable frame updates its scroll region
+        self.history_scroll_frame.update_idletasks()
 
-    def _clear_history_gui(self) -> None:
-        """
-        Triggers the clear history operation and updates the GUI.
-        """
+
+    def _confirm_clear_history(self):
+        """Asks for user confirmation before clearing the entire history."""
+        # CustomTkinter does not have a direct confirm dialog, so we use tkinter's messagebox.
+        # For a more integrated look, a custom CTk dialog could be implemented.
+        response = messagebox.askyesno(
+            "Clear History",
+            "Are you sure you want to clear ALL processing history? This action cannot be undone."
+        )
+        if response:
+            self._clear_history()
+        else:
+            self.logger.info("Clear history action cancelled by user.")
+            self.app_instance.set_status("Clear history cancelled.")
+
+
+    def _clear_history(self):
+        """Clears all processing history."""
         success, message = self.history_manager.clear_history()
-        self.app_instance.set_status(message, level="info" if success else "warning")
         if success:
-            self._display_history() # Refresh display after clearing
+            self.logger.info("All processing history cleared successfully.")
+            self.app_instance.set_status("All history cleared.")
+            self.refresh_page_content() # Refresh display to show empty history
+            messagebox.showinfo("History Cleared", "All processing history has been successfully cleared.")
+        else:
+            self.logger.error(f"Failed to clear history: {message}")
+            self.app_instance.set_status(f"Failed to clear history: {message}", level="error")
+            messagebox.showerror("Error", f"Failed to clear history: {message}")

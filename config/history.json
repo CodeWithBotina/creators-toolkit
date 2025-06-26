@@ -1,13 +1,80 @@
 [
     {
-        "timestamp": "2025-06-25T02:43:50.488809",
-        "task_type": "Image Processing",
-        "input_file": "C:\\Users\\AlejandroBotinaHerre\\Social Media\\templates\\pictures\\image76.jpg",
-        "output_file": "C:\\Users\\AlejandroBotinaHerre\\Pictures\\CreatorToolkit\\image76_nobg.png",
+        "timestamp": "2025-06-26T12:29:39.096404",
+        "task_type": "Social Media Post Creation",
+        "input_file": "C:\\Users\\AlejandroBotinaHerre\\Social Media\\youtube\\24-06-2025\\Python, JavaScript o PSeint Elige TU Primer Lenguaje Correctamente.mp4",
+        "output_file": "output\\social_media\\Python, JavaScript o PSeint Elige TU Primer Lenguaje Correctamente_social_post.mp4",
         "status": "Completed",
-        "message": "Image processed successfully. Output saved to: image76_nobg.png",
+        "message": "Social media video processing complete! Saved to: output\\social_media\\Python, JavaScript o PSeint Elige TU Primer Lenguaje Correctamente_social_post.mp4",
         "details": {
-            "operation_type": "Background Removal/Resizing"
+            "auto_crop": true,
+            "generate_subtitles": true,
+            "subtitle_font_size": 40,
+            "subtitle_font_name": "Times New Roman",
+            "subtitle_color": "#751538",
+            "subtitle_stroke_width": 2,
+            "subtitle_stroke_color": "#000000",
+            "subtitle_font_position_y": 0.82,
+            "subtitle_words_per_line": 3,
+            "auto_remove_silent_segments": true,
+            "apply_auto_video_enhancement": true,
+            "apply_auto_audio_enhancement": true,
+            "delete_original_after_processing": false,
+            "target_social_media_resolution": "1080x1920"
+        }
+    },
+    {
+        "timestamp": "2025-06-26T13:43:36.879605",
+        "task_type": "Social Media Post Creation",
+        "input_file": "C:\\Users\\AlejandroBotinaHerre\\Social Media\\youtube\\24-06-2025\\Python, JavaScript o PSeint Elige TU Primer Lenguaje Correctamente.mp4",
+        "output_file": "C:\\Users\\AlejandroBotinaHerre\\Social Media\\youtube\\24-06-2025\\Python, JavaScript o PSeint Elige TU Primer Lenguaje Correctamente_social_post.mp4",
+        "status": "Failed",
+        "message": "An unexpected error occurred: 'VideoEnhancer' object has no attribute 'process_video_quality'",
+        "details": {
+            "auto_crop": true,
+            "generate_subtitles": true,
+            "subtitle_font_size": 40,
+            "subtitle_font_name": "Times New Roman",
+            "subtitle_color": "#751538",
+            "subtitle_stroke_width": 2,
+            "subtitle_stroke_color": "#000000",
+            "subtitle_font_position_y": 0.82,
+            "subtitle_words_per_line": 3,
+            "auto_remove_silent_segments": true,
+            "min_silence_duration_ms": 1000,
+            "silence_threshold_db": -40,
+            "apply_auto_video_enhancement": true,
+            "apply_auto_audio_enhancement": true,
+            "delete_original_after_processing": false,
+            "target_social_media_resolution": "1080x1920",
+            "overlays": []
+        }
+    },
+    {
+        "timestamp": "2025-06-26T13:44:54.892811",
+        "task_type": "Social Media Post Creation",
+        "input_file": "C:\\Users\\AlejandroBotinaHerre\\Social Media\\youtube\\24-06-2025\\Python, JavaScript o PSeint Elige TU Primer Lenguaje Correctamente.mp4",
+        "output_file": "C:\\Users\\AlejandroBotinaHerre\\Development Environment\\Projects\\creators-toolkit\\output\\social_media\\Python, JavaScript o PSeint Elige TU Primer Lenguaje Correctamente_social_post.mp4",
+        "status": "Failed",
+        "message": "An unexpected error occurred: 'VideoEnhancer' object has no attribute 'process_video_quality'",
+        "details": {
+            "auto_crop": true,
+            "generate_subtitles": true,
+            "subtitle_font_size": 40,
+            "subtitle_font_name": "Trebuchet MS",
+            "subtitle_color": "#751538",
+            "subtitle_stroke_width": 2,
+            "subtitle_stroke_color": "#000000",
+            "subtitle_font_position_y": 0.82,
+            "subtitle_words_per_line": 3,
+            "auto_remove_silent_segments": true,
+            "min_silence_duration_ms": 1000,
+            "silence_threshold_db": -40,
+            "apply_auto_video_enhancement": true,
+            "apply_auto_audio_enhancement": true,
+            "delete_original_after_processing": false,
+            "target_social_media_resolution": "1080x1920",
+            "overlays": []
         }
     }
 ]

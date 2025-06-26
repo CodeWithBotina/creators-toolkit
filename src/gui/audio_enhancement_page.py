@@ -3,6 +3,7 @@ from tkinter import filedialog, messagebox
 import threading
 from pathlib import Path
 import logging
+from typing import Optional # Import Optional for type hinting
 
 # Import core and module components
 from src.core.logger import get_application_logger
@@ -21,8 +22,8 @@ class AudioEnhancementPage(customtkinter.CTkFrame):
         self.app_instance = app_instance # Reference to the main App class for status updates
         self.audio_processor = AudioProcessor() # Instantiate the backend logic
 
-        self.input_file_path = None
-        self.output_file_path = None # Store the full output path suggested/chosen
+        self.input_file_path: Optional[Path] = None
+        self.output_file_path: Optional[Path] = None # Store the full output path suggested/chosen
 
         self.logger.info("Initializing AudioEnhancementPage UI.")
 
@@ -404,23 +405,15 @@ class AudioEnhancementPage(customtkinter.CTkFrame):
         Called on the main thread after processing completes.
         """
         if success:
-            self.app_instance.history_manager.log_task(
-                "Audio Enhancement",
-                self.input_file_path,
-                self.output_file_path,
-                "Completed",
-                f"Audio enhanced successfully. Output saved to: {self.output_file_path.name}",
-                details={"noise_reduction": self.noise_reduction_var.get(), "normalization": self.normalize_audio_var.get()} # Example details
-            )
-            self.app_instance.set_status(f"Audio enhancement complete! Output saved to: {self.output_file_path.name}")
+            messagebox.showinfo("Processing Success", f"Audio processed successfully!\nOutput: {message.split(': ')[-1]}")
+            self.logger.info(f"Audio processing UI completed successfully: {message}")
+            self.progress_label.configure(text="Processing Complete!")
+            self.progress_bar.set(1.0) # Ensure it shows 100%
         else:
-            self.app_instance.history_manager.log_task(
-                "Audio Enhancement",
-                self.input_file_path,
-                self.output_file_path,
-                "Failed",
-                f"Audio enhancement failed: {message}"
-            )
-            self.app_instance.set_status(f"Audio enhancement failed: {message}", level="error")
+            messagebox.showerror("Processing Failed", f"Audio processing failed:\n{message}")
+            self.logger.error(f"Audio processing UI failed: {message}")
+            self.progress_label.configure(text="Processing Failed!")
+            self.progress_bar.set(0) # Reset progress on failure
 
         self._update_ui_state(True) # Re-enable UI elements
+        self.app_instance.set_status(message, level="info" if success else "error")

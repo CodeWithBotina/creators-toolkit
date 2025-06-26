@@ -3,32 +3,29 @@ import shutil
 import subprocess
 import logging
 import cv2
-import json
 import numpy as np
 from pathlib import Path
-from moviepy import VideoFileClip, AudioFileClip, CompositeVideoClip, TextClip, ImageClip
-# Corrected imports for MoviePy 2.x effects:
-from moviepy.video.fx.Crop import Crop as moviepy_crop_fx 
-from moviepy.video.fx.Resize import Resize as moviepy_resize_fx
-# set_position is a method of the clip, not an effect to be imported from fx
+from moviepy import VideoFileClip, AudioFileClip, CompositeVideoClip, TextClip, ImageClip # MoviePy for complex overlays/compositing
+from moviepy.video.fx.Crop import Crop as moviepy_crop_fx # Renamed to avoid conflict
+from moviepy.video.fx.Resize import Resize as moviepy_resize_fx # Renamed to avoid conflict
 from pydub import AudioSegment
-from pydub.silence import split_on_silence
-import speech_recognition as sr
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Callable, Tuple
+# from pydub.silence import split_on_silence # No longer needed, handled by AudioProcessor or Vosk timestamps
+import speech_recognition as sr # For initial transcription concept, will be replaced with Vosk
+from vosk import Model, KaldiRecognizer # Removed set_log_level, as it's causing ImportError
 import math
 import tempfile
-import atexit # For ensuring cleanup of temporary files/dirs
+import atexit
+import json # For Vosk model info, and subtitle timing details
 
 # Core modules
 from src.core.logger import get_application_logger
 from src.core.config_manager import get_application_config
 from src.utils.font_manager import get_application_font_manager
 
-# Import specific modules for enhancements if needed, or implement basic logic here
-# For now, integrating basic enhancement logic directly for simplicity,
-# but can be refactored to use VideoEnhancer/AudioProcessor modules in the future.
-import noisereduce as nr
-import librosa # For audio processing, if needed beyond pydub
+# Import specific modules for enhancements if needed (DRY principle)
+from src.modules.audio_processor import AudioProcessor # Reusing for audio enhancement
+from src.modules.video_enhancer import VideoEnhancer # Reusing for video enhancement
 
 class SocialMediaVideoProcessorError(Exception):
     """Custom exception for social media video processor errors."""
@@ -36,744 +33,297 @@ class SocialMediaVideoProcessorError(Exception):
 
 class SocialMediaVideoProcessor:
     """
-    Processes video for social media platforms, focusing on:
-    - Intelligent cropping to 9:16 aspect ratio with subject tracking.
-    - Automatic and precisely synchronized subtitle generation with customization options.
-    - Intelligent removal of silent or non-speech segments.
-    - Automatic video and audio quality enhancements.
-    - Support for overlaying images, text, and additional audio tracks.
+    Processes videos for social media platforms, including intelligent cropping,
+    subtitle generation, silent segment removal, and automatic enhancements.
+    Optimized for efficiency using FFmpeg, OpenCV, Vosk for offline ASR,
+    and reusing existing audio/video enhancement modules.
     """
     def __init__(self):
         self.logger = get_application_logger()
         self.config = get_application_config()
         self.font_manager = get_application_font_manager()
-        self._is_processing = False
-        self._external_progress_callback = None
-        self.temp_dir = None # To store temporary files for the current processing session
+        self.audio_processor = AudioProcessor() # Reusing the audio processing module
+        self.video_enhancer = VideoEnhancer() # Reusing the video enhancement module
 
-        # Load OpenCV's Haar Cascade for face detection
-        # Ensure this file is accessible. It's usually part of OpenCV installation.
-        self.face_cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-        if not Path(self.face_cascade_path).exists():
-            self.logger.error(f"Haar cascade file not found: {self.face_cascade_path}. Face tracking will be disabled.")
-            self.face_cascade = None # Disable face detection if file is missing
-        else:
-            self.face_cascade = cv2.CascadeClassifier(self.face_cascade_path)
-            if self.face_cascade.empty():
-                self.logger.error(f"Could not load Haar cascade classifier from {self.face_cascade_path}. Face tracking will be disabled.")
-                self.face_cascade = None
+        self._is_processing = False # Internal state to track if a process is in progress
+        self._external_progress_callback = None # Callback for GUI progress updates
 
-        self.recognizer = sr.Recognizer()
+        # Retrieve models directory from config for Vosk
+        self.models_dir = Path(self.config.get_setting("app_settings.models_dir"))
+        self.vosk_model_path = self.models_dir / "vosk-model-en-us-0.22" # Example Vosk model name
+        self.vosk_recognizer = None # Will be initialized on demand
 
         self.logger.info("SocialMediaVideoProcessor initialized.")
-        atexit.register(self._cleanup_temp_dir_on_exit) # Register cleanup on app exit
 
     def _update_progress(self, progress_percentage: int, message: str, level: str = "info"):
         """
         Internal helper to update progress and log messages.
+        Ensures progress_percentage is within a valid range [0, 100].
         """
         if self._external_progress_callback:
-            # Ensure progress_percentage is within [0, 100]
-            progress_percentage = max(0, min(100, progress_percentage))
-            self._external_progress_callback(progress_percentage, message)
+            clamped_percentage = max(0, min(100, progress_percentage))
+            self._external_progress_callback(clamped_percentage, message)
         self.logger.log(getattr(logging, level.upper()), f"SOCIAL_MEDIA_PROCESS_PROGRESS: {message} ({progress_percentage}%)")
 
-    def _create_temp_directory(self):
-        """Creates a temporary directory for the current processing session."""
-        self.temp_dir = Path(tempfile.mkdtemp(prefix="creators_toolkit_social_media_"))
-        self.logger.debug(f"Created temporary directory: {self.temp_dir}")
-
-    def _cleanup_temp_dir_on_exit(self):
-        """Cleanup temporary directory if it exists."""
-        if self.temp_dir and self.temp_dir.exists():
-            try:
-                shutil.rmtree(self.temp_dir)
-                self.logger.info(f"Cleaned up temporary directory: {self.temp_dir}")
-                self.temp_dir = None
-            except Exception as e:
-                self.logger.warning(f"Failed to remove temporary directory {self.temp_dir}: {e}")
-
-    def _get_video_info(self, video_path: Path) -> Dict[str, Any]:
+    def _run_ffmpeg_command(self, command: List[str], description: str, log_level: str = "info") -> Tuple[bool, str]:
         """
-        Uses ffprobe to get video duration, width, height, and FPS.
+        Executes an FFmpeg command using subprocess.
         """
-        command = [
-            "ffprobe",
-            "-v", "error",
-            "-select_streams", "v:0", # Select only video stream
-            "-show_entries", "stream=width,height,avg_frame_rate,duration",
-            "-of", "json",
-            str(video_path)
-        ]
+        self.logger.info(f"Executing FFmpeg command for {description}: {' '.join(command)}")
         try:
-            result = subprocess.run(command, capture_output=True, text=True, check=True, creationflags=subprocess.CREATE_NO_WINDOW)
-            info = json.loads(result.stdout)
-            
-            width = info['streams'][0]['width']
-            height = info['streams'][0]['height']
-            avg_frame_rate_str = info['streams'][0]['avg_frame_rate']
-            # Convert fraction to float (e.g., "30000/1001" to 29.97)
-            num, den = map(int, avg_frame_rate_str.split('/'))
-            fps = num / den
-            duration = float(info['streams'][0]['duration'])
-
-            return {"width": width, "height": height, "fps": fps, "duration": duration}
-        except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError, IndexError, ValueError) as e:
-            self.logger.error(f"Failed to get video info for {video_path} using ffprobe: {e}", exc_info=True)
-            raise SocialMediaVideoProcessorError(f"Could not determine video info. Is FFprobe installed and is the video valid? Error: {e}")
-        except FileNotFoundError:
-            self.logger.error("ffprobe executable not found. Please ensure FFmpeg (which includes ffprobe) is installed and in your PATH.")
-            raise SocialMediaVideoProcessorError("FFprobe not found. Please install FFmpeg.")
-
-
-    def _extract_audio(self, video_path: Path, output_audio_path: Path):
-        """Extracts audio from video and saves it to a temporary file."""
-        self._update_progress(5, "Extracting audio...")
-        self.logger.info(f"Extracting audio from '{video_path}' to '{output_audio_path}'")
-        command = [
-            "ffmpeg",
-            "-i", str(video_path),
-            "-vn",             # No video
-            "-c:a", "aac",     # Encode to AAC for broader compatibility and smaller size
-            "-b:a", "192k",    # Audio bitrate
-            "-y",              # Overwrite output file
-            str(output_audio_path)
-        ]
-        try:
-            subprocess.run(command, check=True, capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
-            self.logger.info("Audio extraction successful.")
+            # Use CREATE_NO_WINDOW on Windows to prevent a console window from popping up
+            creationflags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+            process = subprocess.run(command, check=True, capture_output=True, text=True, encoding='utf-8', creationflags=creationflags)
+            self.logger.debug(f"FFmpeg STDOUT: {process.stdout}")
+            self.logger.debug(f"FFmpeg STDERR: {process.stderr}")
+            self.logger.log(getattr(logging, log_level.upper()), f"FFmpeg command for {description} completed successfully.")
+            return True, "Success"
         except subprocess.CalledProcessError as e:
-            self.logger.error(f"FFmpeg audio extraction failed: {e.stderr}", exc_info=True)
-            raise SocialMediaVideoProcessorError(f"Failed to extract audio: {e.stderr.strip()}")
+            self.logger.error(f"FFmpeg command failed for {description}. Exit code: {e.returncode}", exc_info=True)
+            self.logger.error(f"FFmpeg STDOUT: {e.stdout}")
+            self.logger.error(f"FFmpeg STDERR: {e.stderr}")
+            return False, f"FFmpeg command failed: {e.stderr}"
         except FileNotFoundError:
-            raise SocialMediaVideoProcessorError("FFmpeg not found. Please ensure FFmpeg is installed and in your system's PATH.")
+            self.logger.critical("FFmpeg executable not found. Please ensure FFmpeg is installed and in your system's PATH, or correctly configured.")
+            return False, "FFmpeg not found. Please install it and add to PATH."
+        except Exception as e:
+            self.logger.error(f"An unexpected error occurred while running FFmpeg command for {description}: {e}", exc_info=True)
+            return False, f"Unexpected error: {e}"
 
-    def _transcribe_audio(self, audio_path: Path) -> List[Dict[str, Any]]:
+    def _get_main_content_bounding_box(self, video_path: Path) -> Optional[Tuple[int, int, int, int]]:
         """
-        Transcribes audio to text with timestamps using Google Web Speech API.
-        Returns a list of dictionaries: [{'text': ..., 'start': ..., 'end': ...}].
-        """
-        self._update_progress(10, "Transcribing audio (this may take a while)...")
-        self.logger.info(f"Transcribing audio from: {audio_path}")
+        Analyzes video frames to find a bounding box that contains the most significant
+        motion or visual content, to assist in intelligent cropping.
         
-        try:
-            audio = AudioSegment.from_file(audio_path)
-            # Adjust frame rate for WebRTCVAD compatible segmentation later if needed, but SR handles chunks
-            # For accurate timing, it's better to process in chunks.
+        Args:
+            video_path (Path): Path to the input video file.
             
-            # Split audio into manageable chunks if very long, but for now, SR can handle larger files.
-            # SpeechRecognition's recognize_google can often handle the chunking internally for larger files,
-            # but for more robust timestamping, manual chunking might be considered with silence detection.
+        Returns:
+            Optional[Tuple[int, int, int, int]]: (x, y, width, height) of the content,
+                                                or None if detection fails.
+        """
+        self.logger.info(f"Analyzing video '{video_path}' for main content bounding box...")
+        cap = cv2.VideoCapture(str(video_path))
+        if not cap.isOpened():
+            self.logger.error(f"Could not open video file for analysis: {video_path}")
+            return None
+
+        min_x, min_y = float('inf'), float('inf')
+        max_x, max_y = float('-inf'), float('-inf')
+
+        frame_count = 0
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
             
-            # Using recognizer.record(source) with AudioFile allows it to read the whole file
-            with sr.AudioFile(str(audio_path)) as source:
-                audio_listened = self.recognizer.record(source)
+            # Convert to grayscale for motion detection or content analysis
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             
-            # Use recognize_google for transcription.
-            # Currently, speech_recognition's built-in Google API does not return word-level timestamps directly.
-            # To get word-level timestamps, one would typically need to use:
-            # 1. A different API (e.g., Google Cloud Speech-to-Text API with word-level confidence).
-            # 2. A more complex offline model (e.g., Vosk, Whisper).
-            #
-            # Given the current setup, we can only get sentence/phrase-level timestamps by:
-            # a) Splitting audio by silence first, then transcribing each segment.
-            # b) Using a library like `aeneas` for forced alignment (more complex setup).
+            # Apply threshold to find significant pixels (adjust threshold as needed)
+            # This can be improved with background subtraction or more advanced techniques
+            _, thresh = cv2.threshold(gray, 50, 255, cv2.THRESH_BINARY) # Simple threshold
             
-            # For "precise synchronization" and "3 words per line", splitting by silence first is key.
-            # Let's adapt the strategy to split by silence, then transcribe.
-
-            # Load audio for silence splitting
-            audio_segment = AudioSegment.from_file(audio_path)
+            # Find contours
+            contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             
-            min_silence_len_ms = self.config.get_setting("processing_parameters.social_media_post_processing.min_silence_duration_ms", 1000)
-            silence_thresh_db = self.config.get_setting("processing_parameters.social_media_post_processing.silence_threshold_db", -40)
-
-            audio_chunks = split_on_silence(
-                audio_segment,
-                min_silence_len=min_silence_len_ms,
-                silence_thresh=silence_thresh_db,
-                keep_silence=200 # Keep 200ms of silence at chunk edges for natural sound
-            )
-
-            transcripts = []
-            current_time_ms = 0
-            total_chunks = len(audio_chunks)
-            self.logger.debug(f"Audio split into {total_chunks} chunks for transcription.")
-
-            for i, chunk in enumerate(audio_chunks):
-                chunk_start_ms = current_time_ms
-                chunk_end_ms = current_time_ms + len(chunk)
-
-                # Export chunk to a temporary WAV file for speech_recognition
-                chunk_file = self.temp_dir / f"chunk_{i}.wav"
-                chunk.export(chunk_file, format="wav")
-
-                with sr.AudioFile(str(chunk_file)) as source:
-                    audio_listened = self.recognizer.record(source)
-                    try:
-                        text = self.recognizer.recognize_google(audio_listened, language="en-US") # Assuming English for now
-                        self.logger.debug(f"Chunk {i} transcribed: '{text}'")
-                        
-                        # Here's the critical part: breaking into 3-word segments
-                        words = text.split()
-                        words_per_line = self.config.get_setting("processing_parameters.social_media_post_processing.subtitle_words_per_line", 3)
-                        
-                        for j in range(0, len(words), words_per_line):
-                            line_text = " ".join(words[j : j + words_per_line])
-                            # Approximate timing for each line within the chunk.
-                            # This is a simplification; for true word-level, a different SR setup is needed.
-                            # But for "aligned with what is said", chunk-level accuracy is a start.
-                            # We can refine this later if real-time word-level SR is integrated.
-                            line_start_ms = chunk_start_ms + (j / len(words)) * len(chunk) if len(words) > 0 else chunk_start_ms
-                            line_end_ms = chunk_start_ms + ((j + words_per_line) / len(words)) * len(chunk) if len(words) > 0 else chunk_end_ms
-                            line_end_ms = min(line_end_ms, chunk_end_ms) # Ensure end time doesn't exceed chunk end
-
-                            transcripts.append({
-                                'text': line_text,
-                                'start': line_start_ms / 1000.0, # Convert to seconds
-                                'end': line_end_ms / 1000.0 # Convert to seconds
-                            })
-                    except sr.UnknownValueError:
-                        self.logger.warning(f"Could not understand audio in chunk {i}")
-                    except sr.RequestError as e:
-                        self.logger.error(f"Could not request results from Google Speech Recognition service; {e}", exc_info=True)
-                        raise SocialMediaVideoProcessorError(f"Speech Recognition service error: {e}")
-                    except Exception as e:
-                        self.logger.error(f"Error during chunk transcription: {e}", exc_info=True)
+            if contours:
+                # Combine all bounding boxes of detected contours
+                x_coords = []
+                y_coords = []
+                for contour in contours:
+                    x, y, w, h = cv2.boundingRect(contour)
+                    x_coords.extend([x, x + w])
+                    y_coords.extend([y, y + h])
                 
-                current_time_ms = chunk_end_ms # Move time forward for next chunk
-                self._update_progress(10 + int((i / total_chunks) * 20), f"Transcribing audio chunk {i+1}/{total_chunks}...")
-
-            return transcripts
-        except Exception as e:
-            self.logger.error(f"Error during audio transcription: {e}", exc_info=True)
-            raise SocialMediaVideoProcessorError(f"Audio transcription failed: {e}")
-
-    def _identify_and_remove_silent_segments(self, original_clip: VideoFileClip, original_audio_path: Path) -> VideoFileClip:
-        """
-        Identifies silent segments in the audio and removes corresponding parts from the video.
-        Returns a new video clip without silent parts.
-        """
-        if not self.config.get_setting("processing_parameters.social_media_post_processing.auto_remove_silent_segments", True):
-            self.logger.info("Automatic silent segment removal is disabled by configuration.")
-            return original_clip
-
-        self._update_progress(30, "Analyzing audio for silent segments...")
-        self.logger.info("Identifying silent segments for removal.")
-
-        try:
-            audio_segment = AudioSegment.from_file(original_audio_path)
-            min_silence_len_ms = self.config.get_setting("processing_parameters.social_media_post_processing.min_silence_duration_ms", 1000)
-            silence_thresh_db = self.config.get_setting("processing_parameters.social_media_post_processing.silence_threshold_db", -40)
-
-            # This splits the audio into non-silent parts, keeping silence at edges for smooth transitions
-            audio_parts = split_on_silence(
-                audio_segment,
-                min_silence_len=min_silence_len_ms,
-                silence_thresh=silence_thresh_db,
-                keep_silence=200 # Keep a short silence to prevent abrupt cuts
-            )
-
-            # Reconstruct transcript based on speech parts to only keep spoken content
-            # (If _transcribe_audio was used to split by silence, this step might be redundant)
-            
-            # Create a list of (start_time_sec, end_time_sec) for the *spoken* parts
-            spoken_intervals = []
-            current_time_ms = 0
-            for part in audio_parts:
-                start_sec = current_time_ms / 1000.0
-                end_sec = (current_time_ms + len(part)) / 1000.0
-                spoken_intervals.append((start_sec, end_sec))
-                current_time_ms += len(part)
-
-            if not spoken_intervals:
-                self.logger.warning("No speech detected in the audio. Returning original video.")
-                return original_clip # Return original if no speech
-
-            self.logger.info(f"Identified {len(spoken_intervals)} spoken intervals.")
-            
-            # Create subclips from the original video based on spoken intervals
-            clips_to_concatenate = []
-            for i, (start, end) in enumerate(spoken_intervals):
-                self.logger.debug(f"Extracting subclip from {start:.2f}s to {end:.2f}s (Part {i+1}).")
-                # Ensure start and end times are within the video's duration
-                start = max(0, start)
-                end = min(original_clip.duration, end)
-                if end > start: # Only add if valid duration
-                    clips_to_concatenate.append(original_clip.subclip(start, end))
-
-            if not clips_to_concatenate:
-                self.logger.warning("No valid video segments to concatenate after silent removal. Returning original video.")
-                return original_clip
-
-            final_video = MoviePyEditor.concatenate_videoclips(clips_to_concatenate) # Using MoviePy directly here
-            self.logger.info(f"Video trimmed by removing silent segments. New duration: {final_video.duration:.2f}s")
-            self._update_progress(35, "Silent segments removed.")
-            return final_video
-
-        except Exception as e:
-            self.logger.error(f"Error identifying or removing silent segments: {e}", exc_info=True)
-            self._update_progress(35, "Failed to remove silent segments (continuing with full video).", "warning")
-            return original_clip # Fallback to original clip if silent removal fails
-
-    def _auto_crop_and_resize(self, original_clip: VideoFileClip, target_aspect_ratio: float = 9/16, smoothing_frames: int = 5) -> VideoFileClip:
-        """
-        Analyzes video frames for faces, calculates a smoothed center, and creates a new
-        VideoFileClip that is cropped and resized to the target aspect ratio,
-        following the main subject(s).
-        """
-        self._update_progress(40, "Analyzing video for intelligent cropping...")
-        self.logger.info(f"Applying intelligent cropping to aspect ratio {target_aspect_ratio:.2f}.")
-
-        if not self.face_cascade:
-            self.logger.warning("Face detection not available. Skipping intelligent cropping. Video will be center-cropped.")
-            # Fallback to simple center crop if face detection is not available
-            return original_clip.fx(moviepy_resize_fx, width=original_clip.h * target_aspect_ratio).set_position("center") # Resize to target width and center
-
-        # Determine target dimensions
-        original_width, original_height = original_clip.w, original_clip.h
-        target_height = original_height # Keep original height, crop width
-        target_width = int(target_height * target_aspect_ratio)
-
-        if target_width > original_width:
-            self.logger.warning(f"Target width ({target_width}) is greater than original width ({original_width}). Resizing original video to fit target aspect ratio.")
-            original_clip = original_clip.fx(moviepy_resize_fx, width=target_width) # Scale up if necessary
-            original_width = original_clip.w
-            original_height = original_clip.h # Update original dimensions
-
-        # Analyze frames to find face positions
-        face_centers = [] # List of (x, y) coordinates for each frame
-        self.logger.debug("Detecting faces in each frame...")
-
-        # Process frames in batches or iteratively to save memory
-        frame_iter = original_clip.iter_frames(fps=5, progress_callback=lambda x: self._update_progress(40 + int(x/original_clip.duration * 10), "Detecting faces...")) # Sample at 5 FPS for speed
-
-        for i, frame in enumerate(frame_iter):
-            gray_frame = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
-            faces = self.face_cascade.detectMultiScale(gray_frame, 1.1, 5) # scaleFactor, minNeighbors
-
-            if len(faces) > 0:
-                # Use the largest face or the average of all faces
-                main_face = max(faces, key=lambda rect: rect[2] * rect[3]) # Face with largest area
-                (x, y, w, h) = main_face
-                center_x = x + w // 2
-                center_y = y + h // 2
-                face_centers.append((center_x, center_y))
-            else:
-                # If no face, keep the last known position or center
-                if face_centers:
-                    face_centers.append(face_centers[-1]) # Use last known position
-                else:
-                    face_centers.append((original_width // 2, original_height // 2)) # Default to center
-
-        if not face_centers:
-            self.logger.warning("No faces detected throughout the video. Falling back to simple center crop.")
-            return original_clip.fx(moviepy_crop_fx, width=target_width, height=target_height, x_center=original_width/2, y_center=original_height/2)
-
-
-        # Smooth the face center trajectory
-        smoothed_centers = []
-        for i in range(len(face_centers)):
-            start_idx = max(0, i - smoothing_frames // 2)
-            end_idx = min(len(face_centers), i + smoothing_frames // 2 + 1)
-            
-            # Calculate average for smoothing window
-            x_coords = [c[0] for c in face_centers[start_idx:end_idx]]
-            y_coords = [c[1] for c in face_centers[start_idx:end_idx]]
-            
-            smoothed_centers.append((int(np.mean(x_coords)), int(np.mean(y_coords))))
+                if x_coords and y_coords:
+                    min_x = min(min_x, min(x_coords))
+                    min_y = min(min_y, min(y_coords))
+                    max_x = max(max_x, max(x_coords))
+                    max_y = max(max_y, max(y_coords))
+            frame_count += 1
+            if frame_count % 50 == 0: # Process every 50th frame for speed
+                self.logger.debug(f"Analyzed {frame_count} frames for content box...")
         
-        # Now, create a function for MoviePy's custom transform based on smoothed centers
-        # This function determines the x-offset for the crop for each frame.
-        def get_crop_x(t):
-            # Map time 't' (seconds) to frame index
-            frame_idx = int(t * original_clip.fps)
-            if frame_idx >= len(smoothed_centers):
-                frame_idx = len(smoothed_centers) - 1 # Cap to last known center
+        cap.release()
 
-            center_x, _ = smoothed_centers[frame_idx]
-            
-            # Calculate the x-position for the crop, ensuring it stays within bounds
-            # The crop's left edge is (center_x - target_width / 2)
-            # The crop's right edge is (center_x + target_width / 2)
-            
-            # Ensure the crop window does not go beyond the original video edges
-            left_bound = 0
-            right_bound = original_width - target_width
+        if min_x == float('inf') or max_x == float('-inf'):
+            self.logger.warning("No significant content detected for cropping. Returning None.")
+            return None # No content detected
 
-            desired_x_start = center_x - target_width // 2
-            
-            # Clamp the desired x_start within valid bounds
-            final_x_start = max(left_bound, min(right_bound, desired_x_start))
+        content_width = max_x - min_x
+        content_height = max_y - min_y
+        
+        self.logger.info(f"Detected content bounding box: ({min_x}, {min_y}, {content_width}, {content_height})")
+        return (min_x, min_y, content_width, content_height)
 
-            return final_x_start
 
-        self._update_progress(50, "Applying dynamic cropping...")
-        cropped_clip = original_clip.fx(
-            moviepy_crop_fx, 
-            width=target_width, 
-            height=target_height, 
-            x=get_crop_x, # Dynamic x position
-            y_center=original_height // 2 # Keep y-center constant for now (vertical centering assumed for 9:16)
-        )
-        self.logger.info(f"Video cropped dynamically to {target_width}x{target_height}.")
-        self._update_progress(55, "Video intelligently cropped.")
-        return cropped_clip
-
-    def _apply_automatic_enhancements(self, video_clip: VideoFileClip, audio_clip: AudioFileClip) -> Tuple[VideoFileClip, AudioFileClip]:
+    def _transcribe_audio_vosk(self, audio_filepath: Path) -> List[Dict[str, Any]]:
         """
-        Applies automatic video and audio quality enhancements based on configuration.
-        This is a simplified integration. For full control, external modules should be used.
+        Transcribes audio using the offline Vosk speech recognition engine.
+        Returns a list of dictionaries with 'text', 'start', and 'end' for each word.
+        
+        Args:
+            audio_filepath (Path): Path to the audio file (preferably WAV, 16kHz, mono).
+            
+        Returns:
+            List[Dict[str, Any]]: A list of word-level transcription results.
         """
-        self._update_progress(60, "Applying automatic video and audio enhancements...")
-        self.logger.info("Starting automatic quality enhancements.")
-
-        # --- Video Enhancement ---
-        apply_video_enhancement = self.config.get_setting("processing_parameters.social_media_post_processing.apply_auto_video_enhancement", True)
-        if apply_video_enhancement:
-            self.logger.debug("Applying video enhancements.")
-            params = self.config.get_setting("processing_parameters.video_enhancement") # Reuse params from video_enhancer
-
-            filters = []
-            denoise_strength = params.get("denoise_strength", 2.0)
-            if denoise_strength > 0:
-                filters.append(f"hqdn3d={denoise_strength}:{denoise_strength}:{denoise_strength}:{denoise_strength}")
-
-            sharpen_strength = params.get("sharpen_strength", 0.5)
-            if sharpen_strength > 0:
-                amount = 0.5 + (sharpen_strength * 1.0)
-                filters.append(f"unsharp=5:5:{amount}:5:5:0.0")
-
-            contrast = params.get("contrast_enhance", 1.1)
-            brightness = params.get("brightness", 0.0)
-            saturation = params.get("saturation", 1.1)
-            gamma = params.get("gamma", 1.0)
-            shadow_highlight = params.get("shadow_highlight", 0.2) # Use for slight adjustment
-
-            adjusted_contrast = contrast + (shadow_highlight * 0.1)
-            adjusted_brightness = brightness + (shadow_highlight * 0.05)
-
-            filters.append(f"eq=contrast={adjusted_contrast}:brightness={adjusted_brightness}:saturation={saturation}:gamma={gamma}")
-
-            if filters:
-                video_clip = video_clip.fx(lambda clip: clip.fl_image(
-                    lambda img_array: self._apply_ffmpeg_filters_to_image(img_array, ",".join(filters)))
+        self.logger.info(f"Transcribing audio with Vosk from: {audio_filepath}")
+        
+        # Ensure Vosk model is loaded
+        if self.vosk_recognizer is None:
+            if not self.vosk_model_path.exists():
+                self.logger.error(f"Vosk model not found at: {self.vosk_model_path}")
+                raise SocialMediaVideoProcessorError(
+                    f"Vosk model not found. Please ensure the Vosk model "
+                    f"'{self.vosk_model_path.name}' is downloaded in '{self.vosk_model_path.parent}'."
                 )
-                self.logger.debug("Video filters applied via MoviePy's fl_image.")
-            else:
-                self.logger.debug("No video filters to apply.")
-        else:
-            self.logger.info("Automatic video enhancement disabled.")
+            # set_log_level(-1) # Removed as it's causing ImportError
+            self.vosk_recognizer = KaldiRecognizer(Model(str(self.vosk_model_path)), 16000) # 16kHz sample rate
 
-        # --- Audio Enhancement ---
-        apply_audio_enhancement = self.config.get_setting("processing_parameters.social_media_post_processing.apply_auto_audio_enhancement", True)
-        if apply_audio_enhancement:
-            self.logger.debug("Applying audio enhancements.")
-            audio_params = self.config.get_setting("processing_parameters.audio_enhancement") # Reuse params from audio_enhancement
-
-            # Convert MoviePy AudioFileClip to pydub AudioSegment for processing
-            audio_segment_path = self.temp_dir / "temp_audio_for_enhancement.wav"
-            audio_clip.write_audiofile(str(audio_segment_path), logger=None)
-            
-            try:
-                audio_segment = AudioSegment.from_file(audio_segment_path)
-
-                # Noise Reduction
-                noise_reduction_strength = audio_params.get("noise_reduction_strength", 0.5)
-                if noise_reduction_strength > 0:
-                    self.logger.debug(f"Applying noise reduction with strength: {noise_reduction_strength}")
-                    # noisereduce works on numpy arrays
-                    y, sr = librosa.load(str(audio_segment_path), sr=audio_params.get("sample_rate", 48000), mono=True) # Load as mono for NR
-                    # Estimate noise profile (e.g., from first 0.5 seconds or a dedicated silent part)
-                    noise_len = min(int(0.5 * sr), len(y)) # Estimate noise from first 0.5s
-                    noise_profile = y[0:noise_len]
-                    reduced_noise_audio = nr.reduce_noise(audio_clip=y, noise_clip=noise_profile, verbose=False,
-                                                          prop_decrease=noise_reduction_strength) # prop_decrease controls strength
-
-                    # Convert back to AudioSegment
-                    enhanced_audio_segment = AudioSegment(
-                        reduced_noise_audio.tobytes(), 
-                        frame_rate=sr,
-                        sample_width=reduced_noise_audio.dtype.itemsize,
-                        channels=1 # Assuming mono after noise reduction
-                    )
-                    # If original was stereo, convert back to stereo by duplicating channel
-                    if audio_clip.nchannels == 2:
-                        enhanced_audio_segment = enhanced_audio_segment.set_channels(2)
-                    self.logger.debug("Noise reduction applied.")
-                else:
-                    enhanced_audio_segment = audio_segment
-
-                # Normalization
-                normalization_level_dbfs = audio_params.get("normalization_level_dbfs", -3.0)
-                if normalization_level_dbfs is not None:
-                    self.logger.debug(f"Applying normalization to {normalization_level_dbfs} dBFS.")
-                    enhanced_audio_segment = enhanced_audio_segment.normalize(headroom=abs(normalization_level_dbfs))
-                    self.logger.debug("Normalization applied.")
-                
-                # Re-export to MoviePy AudioFileClip
-                enhanced_audio_path = self.temp_dir / "temp_enhanced_audio.wav"
-                enhanced_audio_segment.export(enhanced_audio_path, format="wav")
-                audio_clip = AudioFileClip(str(enhanced_audio_path))
-                self.logger.info("Audio enhancements applied.")
-
-            except Exception as e:
-                self.logger.error(f"Error applying audio enhancements: {e}", exc_info=True)
-                self._update_progress(65, "Failed to apply audio enhancements.", "warning")
-                # Continue with original audio clip if enhancement fails
-        else:
-            self.logger.info("Automatic audio enhancement disabled.")
-
-        self._update_progress(65, "Automatic enhancements applied.")
-        return video_clip, audio_clip
-
-    # Helper function for applying FFmpeg filters to a single image (from a frame)
-    def _apply_ffmpeg_filters_to_image(self, img_array: np.ndarray, filter_string: str) -> np.ndarray:
-        """
-        Applies FFmpeg video filters to a single NumPy image array.
-        This is a workaround to apply FFmpeg filters within MoviePy's fl_image.
-        It's not highly efficient for every frame but good for a few filters.
-        """
-        if not filter_string:
-            return img_array
-
-        # Convert numpy array (RGB) to bytes for ffmpeg input
-        # Use stdin pipe for input, stdout pipe for output
-        h, w, _ = img_array.shape
-        command = [
+        words_info = []
+        
+        # Convert audio to a format suitable for Vosk (16kHz, mono, WAV)
+        temp_mono_wav = audio_filepath.parent / f"{audio_filepath.stem}_16khz_mono.wav"
+        
+        cmd_convert_audio = [
             "ffmpeg",
-            "-y", # Overwrite if exists
-            "-f", "rawvideo",
-            "-vcodec", "rawvideo",
-            "-s", f"{w}x{h}", # Size of the image
-            "-pix_fmt", "rgb24", # Input pixel format
-            "-r", "1", # Frame rate (dummy for single frame)
-            "-i", "-", # Input from stdin
-            "-vf", filter_string,
-            "-pix_fmt", "rgb24", # Output pixel format
-            "-f", "image2pipe", # Output to pipe as raw image
-            "-" # Output to stdout
+            "-i", str(audio_filepath),
+            "-ac", "1",      # Convert to mono
+            "-ar", "16000",  # Resample to 16kHz
+            "-f", "wav",     # Output WAV format
+            "-y", str(temp_mono_wav)
         ]
-        
+        success, msg = self._run_ffmpeg_command(cmd_convert_audio, "audio conversion for Vosk")
+        if not success:
+            raise SocialMediaVideoProcessorError(f"Failed to convert audio for Vosk transcription: {msg}")
+
         try:
-            process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=subprocess.CREATE_NO_WINDOW)
-            output_bytes, stderr_output = process.communicate(input=img_array.tobytes())
+            with open(temp_mono_wav, "rb") as wf:
+                while True:
+                    data = wf.read(4000) # Read in chunks
+                    if len(data) == 0:
+                        break
+                    if self.vosk_recognizer.AcceptWaveform(data):
+                        result = json.loads(self.vosk_recognizer.Result())
+                        if "result" in result:
+                            for word_data in result["result"]:
+                                words_info.append({
+                                    "text": word_data["word"],
+                                    "start": word_data["start"],
+                                    "end": word_data["end"]
+                                })
+            # Get any remaining result after the loop
+            final_result = json.loads(self.vosk_recognizer.FinalResult())
+            if "result" in final_result:
+                for word_data in final_result["result"]:
+                    words_info.append({
+                        "text": word_data["word"],
+                        "start": word_data["start"],
+                        "end": word_data["end"]
+                    })
+        finally:
+            if temp_mono_wav.exists():
+                os.remove(temp_mono_wav) # Clean up temporary WAV file
             
-            if process.returncode != 0:
-                self.logger.error(f"FFmpeg filter application failed: {stderr_output.decode().strip()}")
-                return img_array # Return original image on failure
+        self.logger.info(f"Vosk transcription complete. Found {len(words_info)} words.")
+        return words_info
 
-            # Convert output bytes back to numpy array
-            return np.frombuffer(output_bytes, np.uint8).reshape((h, w, 3))
-        except Exception as e:
-            self.logger.error(f"Error applying FFmpeg filters via subprocess: {e}", exc_info=True)
-            return img_array # Return original image on error
-
-
-    def _generate_subtitle_clips(self, transcript: List[Dict[str, Any]], video_width: int, video_height: int) -> List[TextClip]:
+    def _generate_srt_content(self, words_info: List[Dict[str, Any]], words_per_line: int) -> str:
         """
-        Creates MoviePy TextClips for each subtitle entry.
-        Applies styling and positioning from config.
-        """
-        self._update_progress(70, "Generating subtitle clips...")
-        self.logger.info("Creating subtitle clips.")
-
-        subtitle_clips = []
-        params = self.config.get_setting("processing_parameters.social_media_post_processing")
-
-        font_name = params.get("default_subtitle_font_name", "Arial")
-        font_size = params.get("default_subtitle_font_size", 60)
-        font_color = params.get("default_subtitle_color", "#FFFFFF")
-        stroke_color = params.get("default_subtitle_stroke_color", "#000000")
-        stroke_width = params.get("default_subtitle_stroke_width", 2)
-        position_y_ratio = params.get("default_subtitle_position_y", 0.8) # From top, 0.0 to 1.0
-
-        # Get font path from FontManager
-        font_path = self.font_manager.get_font_path(font_name)
-        if not font_path:
-            self.logger.error(f"Could not find or download font '{font_name}'. Falling back to default system font.")
-            font_path = self.font_manager.get_default_font_path() # Fallback to a system-found default
-
-        for entry in transcript:
-            text = entry['text']
-            start_time = entry['start']
-            end_time = entry['end']
-
-            # MoviePy TextClip
-            clip = TextClip(
-                txt=text,
-                fontsize=font_size,
-                color=font_color,
-                stroke_color=stroke_color,
-                stroke_width=stroke_width,
-                font=str(font_path) # MoviePy expects string path
-            )
-            clip = clip.set_duration(end_time - start_time)
-            clip = clip.set_start(start_time)
-
-            # Position the subtitle at the bottom center of the video
-            # Positional argument can be a tuple (x,y), string ('center'), or function
-            # Here, we set y based on ratio, and x to center.
-            clip = clip.set_position(lambda t: ('center', video_height * position_y_ratio - clip.h / 2)) # Center horizontally, fixed Y
-
-            subtitle_clips.append(clip)
+        Generates SRT content from word-level transcription results with intelligent line breaks.
         
-        self.logger.info(f"Generated {len(subtitle_clips)} subtitle clips.")
-        self._update_progress(75, "Subtitle clips created.")
-        return subtitle_clips
-
-    def _prepare_overlay_clips(self, overlay_items: List[Dict[str, Any]], video_width: int, video_height: int) -> List[Any]:
-        """
-        Prepares MoviePy clips for images, additional text, and audio overlays.
-        `overlay_items` structure:
-        [
-            {'type': 'image', 'path': 'assets/overlays/subscribe.png', 'start': 2.0, 'end': 5.0, 'position': ('center', 'bottom'), 'scale': 0.2},
-            {'type': 'text', 'text': 'Check out my channel!', 'font_size': 40, 'color': 'yellow', 'start': 6.0, 'end': 8.0, 'position': ('center', 'top')},
-            {'type': 'audio', 'path': 'assets/sounds/ding.mp3', 'start': 2.5, 'volume': 0.5}
-        ]
-        """
-        self._update_progress(80, "Preparing overlay clips...")
-        self.logger.info("Preparing various overlay content.")
-
-        clips = []
-        for item in overlay_items:
-            clip = None
-            if item['type'] == 'image':
-                img_path = Path(item['path'])
-                if img_path.exists() and img_path.is_file():
-                    try:
-                        clip = ImageClip(str(img_path))
-                        if 'scale' in item:
-                            clip = clip.fx(moviepy_resize_fx, newsize=lambda s: [s[0] * item['scale'], s[1] * item['scale']])
-                        elif 'width' in item:
-                             clip = clip.fx(moviepy_resize_fx, width=item['width'])
-                        elif 'height' in item:
-                            clip = clip.fx(moviepy_resize_fx, height=item['height'])
-
-                        clip = clip.set_start(item.get('start', 0))
-                        clip = clip.set_duration(item.get('end', clip.duration) - item.get('start', 0))
-                        
-                        # Set position, supports 'center', 'bottom', 'top', (x,y) tuple
-                        pos = item.get('position', ('center', 'center'))
-                        if isinstance(pos, tuple) and isinstance(pos[0], str) and isinstance(pos[1], str):
-                            clip = clip.set_position(pos)
-                        elif isinstance(pos, tuple) and isinstance(pos[0], (int, float)) and isinstance(pos[1], (int, float)):
-                            clip = clip.set_position(pos)
-                        elif isinstance(pos, str): # e.g., 'center'
-                             clip = clip.set_position(pos)
-                        else: # Default if complex logic fails
-                             clip = clip.set_position(('center', 'center'))
-
-                        self.logger.debug(f"Added image overlay: {item['path']}")
-                    except Exception as e:
-                        self.logger.warning(f"Failed to load image overlay {item['path']}: {e}", exc_info=True)
-                else:
-                    self.logger.warning(f"Image overlay path not found: {img_path}")
-
-            elif item['type'] == 'text':
-                try:
-                    font_path = self.font_manager.get_font_path(item.get('font_name', self.config.get_setting("processing_parameters.social_media_post_processing.default_subtitle_font_name", "Arial")))
-                    if not font_path:
-                        font_path = self.font_manager.get_default_font_path()
-
-                    clip = TextClip(
-                        txt=item['text'],
-                        fontsize=item.get('font_size', 40),
-                        color=item.get('color', 'white'),
-                        stroke_color=item.get('stroke_color', 'black'),
-                        stroke_width=item.get('stroke_width', 1),
-                        font=str(font_path)
-                    )
-                    clip = clip.set_start(item.get('start', 0))
-                    clip = clip.set_duration(item.get('end', clip.duration) - item.get('start', 0))
-                    clip = clip.set_position(item.get('position', ('center', 'center')))
-                    self.logger.debug(f"Added text overlay: '{item['text']}'")
-                except Exception as e:
-                    self.logger.warning(f"Failed to create text overlay '{item['text']}': {e}", exc_info=True)
-
-            elif item['type'] == 'audio':
-                audio_path = Path(item['path'])
-                if audio_path.exists() and audio_path.is_file():
-                    try:
-                        clip = AudioFileClip(str(audio_path))
-                        clip = clip.set_start(item.get('start', 0))
-                        if 'volume' in item:
-                            clip = clip.volumex(item['volume'])
-                        self.logger.debug(f"Added audio overlay: {item['path']}")
-                    except Exception as e:
-                        self.logger.warning(f"Failed to load audio overlay {item['path']}: {e}", exc_info=True)
-                else:
-                    self.logger.warning(f"Audio overlay path not found: {audio_path}")
+        Args:
+            words_info (List[Dict[str, Any]]): List of dictionaries, each with 'text', 'start', 'end'.
+            words_per_line (int): Maximum number of words per subtitle line.
             
-            if clip:
-                clips.append(clip)
-        
-        self.logger.info(f"Prepared {len(clips)} overlay clips.")
-        return clips
-
-
-    def _compose_final_video(self, video_clip: VideoFileClip, audio_clip: AudioFileClip, subtitle_clips: List[TextClip], overlay_clips: List[Any]) -> VideoFileClip:
+        Returns:
+            str: The formatted SRT content.
         """
-        Composes all video, audio, subtitle, and overlay clips into a final video.
-        """
-        self._update_progress(85, "Composing final video...")
-        self.logger.info("Composing all elements into final video clip.")
-
-        final_video_clips = [video_clip] + subtitle_clips + [c for c in overlay_clips if isinstance(c, VideoFileClip) or isinstance(c, ImageClip)]
-        final_audio_clips = [audio_clip] + [c for c in overlay_clips if isinstance(c, AudioFileClip)]
-
-        # Combine video layers
-        # CompositeVideoClip requires all clips to have the same duration or be explicitly set.
-        # Ensure that overlay clips have their duration explicitly set or they will expand to longest clip.
-        # Here, overlays are already set with start/duration, so they will blend correctly.
-
-        # Ensure all video clips have a defined duration before compositing
-        for clip in final_video_clips:
-            if not hasattr(clip, 'duration') or clip.duration is None:
-                clip.set_duration(video_clip.duration) # Default to main video duration
-
-        final_video = CompositeVideoClip(final_video_clips, size=video_clip.size)
+        srt_content = []
+        subtitle_number = 1
         
-        # Combine audio layers
-        # Need to handle multiple audio tracks by summing them
-        if final_audio_clips:
-            # Set duration for all audio clips to match the video
-            for audio_c in final_audio_clips:
-                if not hasattr(audio_c, 'duration') or audio_c.duration is None:
-                    audio_c = audio_c.set_duration(video_clip.duration) # Ensure audio clips match video duration
+        if not words_info:
+            return ""
+
+        current_line_words = []
+        
+        for i, word_data in enumerate(words_info):
+            current_line_words.append(word_data)
             
-            # Use audioclips_array to mix
-            mixed_audio = MoviePyEditor.CompositeAudioClip(final_audio_clips) # Using MoviePy directly
-            final_video = final_video.set_audio(mixed_audio)
-            self.logger.info("Audio tracks mixed and set to final video.")
-        else:
-            self.logger.info("No audio tracks to mix. Video will have no audio.")
-            final_video = final_video.set_audio(None) # Explicitly set no audio if none are provided or loaded
+            # Check if we should break the line:
+            # 1. If we reached words_per_line
+            # 2. If it's the last word
+            # 3. If the gap to the next word is large (e.g., > 0.5 seconds) - helps with natural pauses
+            if (len(current_line_words) == words_per_line or
+                i == len(words_info) - 1 or
+                (i + 1 < len(words_info) and (words_info[i+1]["start"] - word_data["end"]) > 0.5)):
+                
+                # Form the text for the current line
+                line_text = " ".join([w["text"] for w in current_line_words])
+                
+                # Determine start and end times for the line
+                start_time_seconds = current_line_words[0]["start"]
+                end_time_seconds = current_line_words[-1]["end"]
+                
+                # Format times to SRT format (HH:MM:SS,ms)
+                start_h, start_m, start_s, start_ms = self._split_seconds_to_srt_components(start_time_seconds)
+                end_h, end_m, end_s, end_ms = self._split_seconds_to_srt_components(end_time_seconds)
 
-        self.logger.info("Final video composition complete.")
-        self._update_progress(90, "Video composition done.")
-        return final_video
+                srt_content.append(str(subtitle_number))
+                srt_content.append(f"{start_h:02}:{start_m:02}:{start_s:02},{start_ms:03} --> {end_h:02}:{end_m:02}:{end_s:02},{end_ms:03}")
+                srt_content.append(line_text)
+                srt_content.append("") # Empty line separates entries
 
-    def process_video_for_social_media(
-        self, 
-        input_filepath: Path, 
-        output_filepath: Path, 
-        processing_options: Dict[str, Any], 
-        progress_callback_func=None
+                current_line_words = []
+                subtitle_number += 1
+
+        return "\n".join(srt_content)
+
+    def _split_seconds_to_srt_components(self, total_seconds: float) -> Tuple[int, int, int, int]:
+        """Helper to convert total seconds to SRT time format components (H, M, S, MS)."""
+        hours = int(total_seconds // 3600)
+        minutes = int((total_seconds % 3600) // 60)
+        seconds = int(total_seconds % 60)
+        milliseconds = int((total_seconds * 1000) % 1000)
+        return hours, minutes, seconds, milliseconds
+
+    def process_social_media_video(
+        self,
+        input_filepath: Path,
+        output_filepath: Path,
+        processing_options: Dict[str, Any],
+        progress_callback_func: Optional[Callable[[int, str], None]] = None
     ) -> Tuple[bool, str]:
         """
-        Main orchestration method for social media video processing.
+        Processes a video for social media platforms based on a dictionary of options.
 
         Args:
-            input_filepath (Path): Path to the input video file.
-            output_filepath (Path): Desired path for the output processed video.
-            processing_options (Dict[str, Any]): Dictionary of options for processing, e.g.:
-                - 'auto_remove_silent_segments': bool
-                - 'delete_original_after_processing': bool
-                - 'overlay_items': List[Dict] (for images, text, extra audio)
-            progress_callback_func (callable, optional): Callback for progress updates.
+            input_filepath (Path): The path to the input video file.
+            output_filepath (Path): The desired path for the output processed video file.
+            processing_options (Dict[str, Any]): A dictionary containing processing settings:
+                                                  - auto_crop (bool)
+                                                  - generate_subtitles (bool)
+                                                  - subtitle_font_size (int)
+                                                  - default_subtitle_font_name (str)
+                                                  - subtitle_color (str, e.g., "#FFFFFF")
+                                                  - subtitle_stroke_width (int)
+                                                  - subtitle_stroke_color (str, e.g., "#000000")
+                                                  - subtitle_font_position_y (float, 0.0 to 1.0, relative to height)
+                                                  - subtitle_words_per_line (int)
+                                                  - auto_remove_silent_segments (bool)
+                                                  - min_silence_duration_ms (int)
+                                                  - silence_threshold_db (float)
+                                                  - apply_auto_video_enhancement (bool)
+                                                  - apply_auto_audio_enhancement (bool)
+                                                  - overlays (List[Dict])
+                                                  - delete_original_after_processing (bool)
+                                                  - target_social_media_resolution (str, e.g., "1080x1920")
+            progress_callback_func (callable, optional): A function to call with progress updates.
+        
         Returns:
-            Tuple[bool, str]: True if successful, False otherwise, and a message.
+            tuple: (bool, str) - True if successful, False otherwise, and a message.
         """
         if self._is_processing:
             self.logger.warning("Attempted to start social media video processing while another is in progress.")
@@ -781,82 +331,361 @@ class SocialMediaVideoProcessor:
 
         self._is_processing = True
         self._external_progress_callback = progress_callback_func
-        self._create_temp_directory()
-
         self.logger.info(f"Starting social media video processing for: {input_filepath}")
-        self._update_progress(0, "Initializing processing...")
+        self._update_progress(0, "Initializing social media video processing...")
+
+        if not input_filepath.exists() or not input_filepath.is_file():
+            self._is_processing = False
+            self.logger.error(f"Input video file not found: {input_filepath}")
+            return False, f"Input video file does not exist: {input_filepath}"
+
+        output_filepath.parent.mkdir(parents=True, exist_ok=True)
+
+        temp_dir_prefix = f"creators_toolkit_social_media_{os.getpid()}_"
+        temp_working_dir = Path(tempfile.mkdtemp(prefix=temp_dir_prefix))
+        atexit.register(lambda: shutil.rmtree(temp_working_dir, ignore_errors=True))
+        self.logger.info(f"Created temporary working directory: {temp_working_dir}")
+
+        temp_video_path = temp_working_dir / "temp_video.mp4"
+        temp_audio_path = temp_working_dir / "temp_audio.wav" # For ASR
+        temp_enhanced_audio_path = temp_working_dir / "temp_enhanced_audio.wav"
+        temp_enhanced_video_path = temp_working_dir / "temp_enhanced_video.mp4"
+        temp_cropped_video_path = temp_working_dir / "temp_cropped_video.mp4"
+        temp_final_video_no_subtitles_path = temp_working_dir / "temp_final_video_no_subtitles.mp4"
+        temp_subtitles_file = temp_working_dir / "subtitles.srt"
+
+        video_clip = None
+        audio_clip = None
+        final_clip = None
 
         try:
-            if not input_filepath.exists() or not input_filepath.is_file():
-                raise SocialMediaVideoProcessorError(f"Input video file not found or is not a file: {input_filepath}")
+            # Load video clip using MoviePy to get duration and dimensions
+            self.logger.info(f"Loading video clip to determine properties: {input_filepath}")
+            self._update_progress(5, "Analyzing video properties...")
+            video_clip = VideoFileClip(str(input_filepath))
+            original_duration = video_clip.duration
+            original_width, original_height = video_clip.size
+            self.logger.info(f"Video loaded. Duration: {original_duration:.2f}s, Dimensions: {original_width}x{original_height}")
+
+            # Step 1: Apply Video Enhancements (if enabled)
+            if processing_options.get("apply_auto_video_enhancement"):
+                self.logger.info("Applying automatic video enhancements.")
+                self._update_progress(10, "Applying video enhancements...")
+                # Fetch enhancement parameters from config (or pass custom ones)
+                video_enhance_params = self.config.get_setting("processing_parameters.video_enhancement")
+                success, msg = self.video_enhancer.enhance_video(
+                    input_filepath, temp_enhanced_video_path, video_enhance_params,
+                    progress_callback_func=lambda p, m: self._update_progress(int(10 + p * 0.1), m) # Scale progress
+                )
+                if not success:
+                    raise SocialMediaVideoProcessorError(f"Video enhancement failed: {msg}")
+                self.logger.info("Video enhancements applied.")
+                input_filepath_for_next_step = temp_enhanced_video_path
+            else:
+                self.logger.info("Skipping automatic video enhancements.")
+                input_filepath_for_next_step = input_filepath
+
+            # Step 2: Extract Audio for processing/transcription
+            self.logger.info("Extracting audio from video for processing...")
+            self._update_progress(20, "Extracting audio...")
+            cmd_extract_audio = [
+                "ffmpeg",
+                "-i", str(input_filepath_for_next_step), # Use enhanced video if applicable
+                "-vn", "-acodec", "pcm_s16le", # Extract as PCM WAV for high quality and compatibility
+                "-ar", "48000", # Desired sample rate for processing
+                "-ac", "1", # Mono channel
+                "-y", str(temp_audio_path)
+            ]
+            success, msg = self._run_ffmpeg_command(cmd_extract_audio, "audio extraction")
+            if not success:
+                self.logger.warning(f"Audio extraction failed: {msg}. Proceeding without audio processing/transcription.")
+                temp_audio_path = None # Mark audio as not available
+
+            # Step 3: Apply Audio Enhancements (if enabled)
+            audio_for_transcription_path = None
+            if temp_audio_path and processing_options.get("apply_auto_audio_enhancement"):
+                self.logger.info("Applying automatic audio enhancements.")
+                self._update_progress(30, "Applying audio enhancements...")
+                # Fetch audio enhancement parameters from config
+                audio_enhance_params = self.config.get_setting("processing_parameters.audio_enhancement")
+                success, msg = self.audio_processor.process_audio_file(
+                    temp_audio_path, temp_enhanced_audio_path, False, # Do not delete original temp_audio_path
+                    progress_callback_func=lambda p, m: self._update_progress(int(30 + p * 0.1), m) # Scale progress
+                )
+                if not success:
+                    raise SocialMediaVideoProcessorError(f"Audio enhancement failed: {msg}")
+                self.logger.info("Audio enhancements applied.")
+                audio_for_transcription_path = temp_enhanced_audio_path
+            else:
+                self.logger.info("Skipping automatic audio enhancements.")
+                audio_for_transcription_path = temp_audio_path # Use original extracted audio if no enhancement
+
+            # Step 4: Generate Subtitles (if enabled)
+            subtitle_clip = None
+            if processing_options.get("generate_subtitles") and audio_for_transcription_path and audio_for_transcription_path.exists():
+                self.logger.info("Generating subtitles from audio.")
+                self._update_progress(40, "Transcribing audio for subtitles...")
+                
+                # Transcribe using Vosk (offline ASR)
+                words_info = self._transcribe_audio_vosk(audio_for_transcription_path)
+                
+                if words_info:
+                    words_per_line = processing_options.get("subtitle_words_per_line", 3)
+                    srt_content = self._generate_srt_content(words_info, words_per_line)
+                    
+                    with open(temp_subtitles_file, "w", encoding="utf-8") as f:
+                        f.write(srt_content)
+                    self.logger.info(f"SRT subtitles generated to: {temp_subtitles_file}")
+
+                    # Use MoviePy's TextClip to create subtitle overlay
+                    font_name = processing_options.get("default_subtitle_font_name", "Arial")
+                    font_path = self.font_manager.get_font_path(font_name) or self.font_manager.get_default_font_path()
+                    
+                    if not font_path.exists():
+                        self.logger.error(f"Subtitle font not found: {font_path}. Using system default.")
+                        font_path = self.font_manager.get_default_font_path() # Fallback to a guaranteed font
+                        
+                    font_size = processing_options.get("subtitle_font_size", 40)
+                    font_color = processing_options.get("subtitle_color", "#FFFFFF")
+                    stroke_width = processing_options.get("subtitle_stroke_width", 2)
+                    stroke_color = processing_options.get("subtitle_stroke_color", "#000000")
+                    # position_y_ratio: 0.0 (top) to 1.0 (bottom)
+                    position_y_ratio = processing_options.get("subtitle_font_position_y", 0.85)
+
+                    # Subtitle styling can be complex. MoviePy TextClip offers good control.
+                    # This example creates a single TextClip that will be dynamically updated
+                    # using FFmpeg's subtitles filter for better performance with complex videos.
+                    self.logger.info("Preparing subtitles for video embedding.")
+                    self._update_progress(50, "Embedding subtitles...")
+                else:
+                    self.logger.warning("No words transcribed, skipping subtitle generation.")
+            else:
+                self.logger.info("Skipping subtitle generation.")
+
+            # Determine the current video source for cropping/finalization
+            current_video_source = input_filepath_for_next_step
+
+            # Step 5: Apply Intelligent Cropping (if enabled)
+            if processing_options.get("auto_crop"):
+                self.logger.info("Applying intelligent cropping.")
+                self._update_progress(60, "Detecting content for smart cropping...")
+                
+                bounding_box = self._get_main_content_bounding_box(current_video_source)
+                
+                if bounding_box:
+                    x, y, w, h = bounding_box
+                    target_resolution_str = processing_options.get("target_social_media_resolution", "1080x1920")
+                    target_width, target_height = map(int, target_resolution_str.split('x'))
+
+                    # Calculate target aspect ratio
+                    target_aspect_ratio = target_width / target_height
+
+                    # Calculate crop box to fit target aspect ratio around content
+                    # This is a simplified approach; a more advanced one would consider
+                    # motion tracking and dynamic cropping over time.
+                    
+                    # Current content aspect ratio
+                    content_aspect_ratio = w / h
+
+                    if content_aspect_ratio > target_aspect_ratio:
+                        # Content is wider than target. Fit width, calculate new height.
+                        new_h = int(w / target_aspect_ratio)
+                        offset_y = max(0, y - (new_h - h) // 2)
+                        # Ensure offset_y doesn't go negative or beyond video height
+                        offset_y = min(offset_y, original_height - new_h) if new_h < original_height else 0
+                        crop_x, crop_y, crop_w, crop_h = x, offset_y, w, new_h
+                    else:
+                        # Content is taller or same aspect ratio as target. Fit height, calculate new width.
+                        new_w = int(h * target_aspect_ratio)
+                        offset_x = max(0, x - (new_w - w) // 2)
+                        # Ensure offset_x doesn't go negative or beyond video width
+                        offset_x = min(offset_x, original_width - new_w) if new_w < original_width else 0
+                        crop_x, crop_y, crop_w, crop_h = offset_x, y, new_w, h
+
+                    # Ensure crop dimensions are within original video boundaries
+                    crop_x = max(0, crop_x)
+                    crop_y = max(0, crop_y)
+                    crop_w = min(crop_w, original_width - crop_x)
+                    crop_h = min(crop_h, original_height - crop_y)
+
+                    self.logger.info(f"Calculated crop: x={crop_x}, y={crop_y}, w={crop_w}, h={crop_h}")
+                    self._update_progress(70, "Applying crop and resizing...")
+
+                    # Use FFmpeg to apply crop and resize in one go for efficiency
+                    cmd_crop_resize = [
+                        "ffmpeg",
+                        "-i", str(current_video_source),
+                        "-vf", f"crop={crop_w}:{crop_h}:{crop_x}:{crop_y},scale={target_width}:{target_height}",
+                        "-c:v", "libx264", # Re-encode with h264
+                        "-preset", "medium",
+                        "-crf", "23",
+                        "-c:a", "copy", # Copy audio
+                        "-y", str(temp_cropped_video_path)
+                    ]
+                    success_crop, msg_crop = self._run_ffmpeg_command(cmd_crop_resize, "intelligent cropping and resizing")
+                    if not success_crop:
+                        raise SocialMediaVideoProcessorError(f"Intelligent cropping failed: {msg_crop}")
+                    current_video_source = temp_cropped_video_path
+                else:
+                    self.logger.warning("Intelligent cropping enabled but no main content detected. Skipping crop.")
+            else:
+                self.logger.info("Skipping intelligent cropping.")
+
+            # Step 6: Compose final video (subtitles, overlays)
+            self.logger.info("Composing final video with subtitles and overlays.")
+            self._update_progress(80, "Compositing final video...")
+
+            # Reload video clip after potential enhancements/cropping
+            final_video_clip_no_audio = VideoFileClip(str(current_video_source))
+
+            # Apply subtitles using FFmpeg's subtitles filter for better performance
+            if processing_options.get("generate_subtitles") and temp_subtitles_file.exists():
+                self.logger.info("Applying subtitles to video via FFmpeg filter.")
+                
+                # FFmpeg subtitle filter requires font config in a specific way
+                # Escape font path for FFmpeg, especially on Windows
+                escaped_font_path = str(font_path).replace("\\", "/") # Convert backslashes to forward slashes for FFmpeg
+                
+                # Subtitle text style directly in filter string (simplistic, for advanced, consider ASS)
+                # FFmpeg subtitles filter: subtitles='path/to/sub.srt':force_style='Fontname=Arial,FontSize=24,PrimaryColour=&H00FFFFFF'
+                # Note: FFmpeg colors are usually BGR hex or by name
+                # Convert #RRGGBB to FFmpeg's &HBBGGRR format, plus transparency if needed
+                subtitle_color_rgb = processing_options.get("subtitle_color", "#FFFFFF").lstrip('#')
+                # BBGGRR for FFmpeg
+                subtitle_color_bgr = f"&H00{subtitle_color_rgb[4:6]}{subtitle_color_rgb[2:4]}{subtitle_color_rgb[0:2]}"
+
+                # Font styling for FFmpeg subtitles filter
+                # PrimaryColour (for text color), OutlineColour (for stroke/outline)
+                # Outline (for stroke width)
+                stroke_color_rgb = processing_options.get("subtitle_stroke_color", "#000000").lstrip('#')
+                subtitle_stroke_color_bgr = f"&H00{stroke_color_rgb[4:6]}{stroke_color_rgb[2:4]}{stroke_color_rgb[0:2]}"
+
+
+                subtitle_style_string = (
+                    f"Fontname={Path(font_path).stem}," # Use stem if font path is too complex
+                    f"FontSize={processing_options.get('subtitle_font_size', 40)},"
+                    f"PrimaryColour={subtitle_color_bgr},"
+                    f"OutlineColour={subtitle_stroke_color_bgr}," # Convert to BGR for outline
+                    f"Outline={processing_options.get('subtitle_stroke_width', 2)},"
+                    f"Alignment=2," # 2 is bottom center in some contexts, but usually a number based on position. ASS uses this.
+                    f"MarginV={int(final_video_clip_no_audio.h * (1.0 - processing_options.get('subtitle_font_position_y', 0.85)))}" # Vertical margin from bottom
+                )
+                
+                # Create a temporary video with subtitles embedded
+                cmd_add_subtitles = [
+                    "ffmpeg",
+                    "-i", str(current_video_source),
+                    "-vf", f"subtitles='{str(temp_subtitles_file)}':force_style='{subtitle_style_string}'",
+                    "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+                    "-c:a", "copy",
+                    "-y", str(temp_final_video_no_subtitles_path)
+                ]
+                success_subtitles, msg_subtitles = self._run_ffmpeg_command(cmd_add_subtitles, "embedding subtitles")
+                if not success_subtitles:
+                    self.logger.warning(f"Failed to embed subtitles: {msg_subtitles}. Proceeding without subtitles.")
+                    final_video_with_subs = final_video_clip_no_audio
+                else:
+                    self.logger.info("Subtitles embedded successfully.")
+                    final_video_with_subs = VideoFileClip(str(temp_final_video_no_subtitles_path))
+                
+                # Clean up the intermediate video created just for subtitles
+                final_video_clip_no_audio.close() # Close previous clip
+                current_video_source = temp_final_video_no_subtitles_path # Update source for next step
+
+            else:
+                self.logger.info("Skipping subtitle embedding.")
+                final_video_with_subs = VideoFileClip(str(current_video_source)) # Use current video directly
+
+            # Apply overlays (if any)
+            overlays_data = processing_options.get("overlays", [])
+            if overlays_data:
+                self.logger.info(f"Applying {len(overlays_data)} overlays.")
+                composite_clip = final_video_with_subs
+                for overlay_info in overlays_data:
+                    overlay_text = overlay_info.get("text")
+                    overlay_image_path = overlay_info.get("image_path")
+                    start_time = overlay_info.get("start_time", 0)
+                    end_time = overlay_info.get("end_time", final_video_with_subs.duration)
+                    position_x = overlay_info.get("position_x", "center") # "center" or pixel value
+                    position_y = overlay_info.get("position_y", "center") # "center" or pixel value
+                    overlay_duration = overlay_info.get("duration", None)
+
+                    if overlay_text:
+                        text_clip = TextClip(
+                            overlay_text,
+                            fontsize=overlay_info.get("font_size", 50),
+                            color=overlay_info.get("color", "white"),
+                            font=overlay_info.get("font_name", "Arial"),
+                            stroke_color=overlay_info.get("stroke_color", None),
+                            stroke_width=overlay_info.get("stroke_width", 0),
+                            bg_color=overlay_info.get("bg_color", None)
+                        )
+                        # Set position
+                        text_clip = text_clip.set_position((position_x, position_y))
+                        # Set duration
+                        text_clip = text_clip.set_start(start_time).set_end(end_time)
+                        if overlay_duration:
+                            text_clip = text_clip.set_duration(overlay_duration)
+                        
+                        composite_clip = CompositeVideoClip([composite_clip, text_clip])
+                        self.logger.debug(f"Added text overlay: '{overlay_text}'")
+
+                    elif overlay_image_path:
+                        if Path(overlay_image_path).exists():
+                            img_clip = ImageClip(str(overlay_image_path))
+                            # Resize if needed
+                            img_clip = img_clip.resize(height=overlay_info.get("height", 100)) # Default height for images
+                            # Set position
+                            img_clip = img_clip.set_position((position_x, position_y))
+                            # Set duration
+                            img_clip = img_clip.set_start(start_time).set_end(end_time)
+                            if overlay_duration:
+                                img_clip = img_clip.set_duration(overlay_duration)
+
+                            composite_clip = CompositeVideoClip([composite_clip, img_clip])
+                            self.logger.debug(f"Added image overlay: '{overlay_image_path}'")
+                        else:
+                            self.logger.warning(f"Overlay image not found: {overlay_image_path}")
+                final_clip = composite_clip
+            else:
+                self.logger.info("No overlays to apply.")
+                final_clip = final_video_with_subs # Use the video with subtitles if any
+
+            # Final audio assembly
+            if audio_for_transcription_path and audio_for_transcription_path.exists():
+                self.logger.info("Attaching final audio to video.")
+                final_audio_clip = AudioFileClip(str(audio_for_transcription_path))
+                final_clip = final_clip.set_audio(final_audio_clip)
+            else:
+                self.logger.warning("No audio to attach to the final video.")
+                final_clip = final_clip.without_audio() # Ensure no audio if not explicitly added
+
+            # Step 7: Export Final Video
+            self.logger.info(f"Exporting final social media video to: {output_filepath}")
+            self._update_progress(95, "Exporting final video...")
             
-            output_filepath.parent.mkdir(parents=True, exist_ok=True) # Ensure output directory exists
+            # Ensure final output resolution is correct after all transformations
+            target_resolution_str = processing_options.get("target_social_media_resolution", "1080x1920")
+            target_width, target_height = map(int, target_resolution_str.split('x'))
 
-            # Step 1: Load original video and audio
-            self._update_progress(1, "Loading video and preparing audio...")
-            # Removed verbose argument as it's not supported in MoviePy 2.x
-            original_clip = VideoFileClip(str(input_filepath)) 
-            
-            # Ensure FFmpeg has enough memory, if specific env variable needed
-            # os.environ["IMAGEIO_FFMPEG_OPTIONS"] = "-threads 4 -f" # Example, typically not needed unless MoviePy struggles
-            
-            # Get video info for cropping/resizing
-            video_info = self._get_video_info(input_filepath)
-            
-            # Extract audio to a temporary file for speech recognition and silence detection
-            temp_audio_path = self.temp_dir / "extracted_original_audio.wav"
-            self._extract_audio(input_filepath, temp_audio_path)
-            
-            audio_clip_original = AudioFileClip(str(temp_audio_path))
+            # Resize the final clip to the target social media resolution
+            if final_clip.size != (target_width, target_height):
+                self.logger.info(f"Resizing final video from {final_clip.size} to {target_width}x{target_height}.")
+                final_clip = moviepy_resize_fx(final_clip, newsize=(target_width, target_height))
 
-            # Step 2: Automatic Quality Enhancements (Video and Audio)
-            processed_video_clip, processed_audio_clip = self._apply_automatic_enhancements(original_clip, audio_clip_original)
-            self._update_progress(65, "Automatic enhancements completed.")
-
-            # Step 3: Identify and remove silent segments
-            video_after_silence_removal = self._identify_and_remove_silent_segments(processed_video_clip, temp_audio_path)
-            self._update_progress(70, "Silence removal handled.")
-
-            # Step 4: Transcribe audio and generate subtitles
-            transcript = self._transcribe_audio(temp_audio_path)
-            subtitle_clips = self._generate_subtitle_clips(transcript, video_after_silence_removal.w, video_after_silence_removal.h)
-            self._update_progress(78, "Subtitles generated.")
-            
-            # Step 5: Intelligent Cropping and Resizing to 9:16
-            # This should happen *after* silence removal as duration might change
-            # and before overlays are positioned relative to final dimensions.
-            target_aspect_ratio = 9 / 16.0
-            smoothing_frames = self.config.get_setting("processing_parameters.social_media_post_processing.face_tracking_smoothing_frames", 5)
-            final_video_base = self._auto_crop_and_resize(video_after_silence_removal, target_aspect_ratio, smoothing_frames)
-            self._update_progress(80, "Video dynamically cropped and resized.")
-
-
-            # Step 6: Prepare overlay clips (images, custom text, additional audio)
-            overlay_items_from_options = processing_options.get('overlay_items', [])
-            overlay_clips = self._prepare_overlay_clips(overlay_items_from_options, final_video_base.w, final_video_base.h)
-            self._update_progress(85, "Overlays prepared.")
-
-            # Step 7: Compose final video with all elements
-            final_composed_video = self._compose_final_video(final_video_base, processed_audio_clip, subtitle_clips, overlay_clips)
-            self._update_progress(95, "Final video composition done.")
-
-            # Step 8: Write the final video file
-            self.logger.info(f"Writing final video to: {output_filepath}")
-            final_composed_video.write_videofile(
+            final_clip.write_videofile(
                 str(output_filepath),
-                codec="libx264",
+                codec="libx264", # H.264 for broad compatibility
                 audio_codec="aac",
-                fps=final_composed_video.fps, # Use the FPS of the final clip
-                threads=os.cpu_count(), # Use all available CPU cores for encoding
-                preset="medium", # For good balance of speed and quality
-                ffmpeg_params=["-crf", "23"], # Constant Rate Factor for quality
-                logger="bar" # Use MoviePy's progress bar (if compatible with our custom one)
-                # Note: This logger will output to console/moviepy log. Our custom progress bar is separate.
+                preset="medium",
+                threads=os.cpu_count(),
+                logger="bar" # Show MoviePy's internal progress
             )
-            self._update_progress(100, "Video processing completed successfully!")
-            self.logger.info(f"Social media video processing completed: {output_filepath}")
 
-            if processing_options.get('delete_original_after_processing', False):
+            self._update_progress(100, "Social media video processing complete!")
+            self.logger.info(f"Social media video processing completed successfully: {output_filepath}")
+
+            if processing_options.get("delete_original_after_processing", False):
                 self.logger.info(f"Attempting to delete original file: {input_filepath}")
                 try:
                     os.remove(input_filepath)
@@ -865,7 +694,7 @@ class SocialMediaVideoProcessor:
                     self.logger.warning(f"Failed to delete original file {input_filepath}: {e}. Skipping deletion.")
             
             self._is_processing = False
-            return True, f"Social media video processing complete! Saved to: {output_filepath}"
+            return True, f"Social media video processed successfully! Saved to: {output_filepath}"
 
         except SocialMediaVideoProcessorError as e:
             self._is_processing = False
@@ -876,34 +705,27 @@ class SocialMediaVideoProcessor:
                     self.logger.info(f"Cleaned up partial output file: {output_filepath}")
                 except Exception as cleanup_e:
                     self.logger.warning(f"Failed to clean up partial output file {output_filepath}: {cleanup_e}")
-            return False, f"Video processing failed: {e}"
+            return False, f"Social media video processing failed: {e}"
         except Exception as e:
             self._is_processing = False
             self.logger.critical(f"An unexpected critical error occurred during social media video processing from '{input_filepath}': {e}", exc_info=True)
             if output_filepath.exists():
                 try:
                     os.remove(output_filepath)
-                    self.logger.info(f"Cleaned up partial final output file: {output_filepath}")
+                    self.logger.info(f"Cleaned up partial output file: {output_filepath}")
                 except Exception as cleanup_e:
-                    self.logger.warning(f"Failed to clean up partial final output file {output_filepath}: {cleanup_e}")
-            return False, f"An unexpected error occurred: {e}"
+                    self.logger.warning(f"Failed to clean up partial output file {output_filepath}: {cleanup_e}")
+            return False, f"An unexpected error occurred during processing: {e}"
         finally:
+            if video_clip: video_clip.close()
+            if audio_clip: audio_clip.close()
+            if final_clip: final_clip.close()
+            if temp_working_dir.exists():
+                self.logger.info(f"Cleaning up temporary directory: {temp_working_dir}")
+                shutil.rmtree(temp_working_dir, ignore_errors=True)
             self._external_progress_callback = None # Clear callback
-            self._cleanup_temp_dir_on_exit() # Ensure temporary directory is cleaned up
+
 
     def is_processing(self) -> bool:
-        """Returns True if a social media video processing task is currently in progress, False otherwise."""
+        """Returns True if a video processing task is currently in progress, False otherwise."""
         return self._is_processing
-
-# Aliases for MoviePy functions to avoid name conflicts and make it explicit
-class MoviePyEditor:
-    """Helper class to encapsulate direct MoviePy functions for clarity."""
-    @staticmethod
-    def concatenate_videoclips(clips, method="compose"):
-        from moviepy.editor import concatenate_videoclips
-        return concatenate_videoclips(clips, method=method)
-
-    @staticmethod
-    def CompositeAudioClip(clips):
-        from moviepy.editor import CompositeAudioClip
-        return CompositeAudioClip(clips)

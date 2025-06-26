@@ -2,17 +2,18 @@ import customtkinter
 from tkinter import filedialog, messagebox
 import threading
 from pathlib import Path
-import logging # <--- ADD THIS LINE HERE
+import logging
+from typing import Optional # Import Optional for type hinting
 
 # Import core and module components
 from src.core.logger import get_application_logger
 from src.core.config_manager import get_application_config
-from src.modules.video_converter import VideoConverter
+from src.modules.video_converter import VideoConverter # Import the backend logic
 
 class VideoConverterPage(customtkinter.CTkFrame):
     """
-    CustomTkinter Frame for the Video Conversion functionality.
-    Allows users to select input/output files and start the conversion.
+    CustomTkinter Frame for the Video Converter functionality.
+    Allows users to select input/output video files and initiate the conversion process.
     """
     def __init__(self, master, app_instance):
         super().__init__(master, fg_color="transparent")
@@ -21,14 +22,14 @@ class VideoConverterPage(customtkinter.CTkFrame):
         self.app_instance = app_instance # Reference to the main App class for status updates
         self.video_converter = VideoConverter() # Instantiate the backend logic
 
-        self.input_file_path = None
-        self.output_file_path = None # Store the full output path suggested/chosen
+        self.input_file_path: Optional[Path] = None
+        self.output_file_path: Optional[Path] = None # Store the full output path suggested/chosen
 
         self.logger.info("Initializing VideoConverterPage UI.")
 
         # Configure grid layout for this page
         self.grid_columnconfigure(0, weight=0) # Labels column
-        self.grid_columnconfigure(1, weight=1) # Entry fields column
+        self.grid_columnconfigure(1, weight=1) # Entry fields and controls column
         self.grid_columnconfigure(2, weight=0) # Buttons column
         self.grid_rowconfigure((0, 1, 2, 3, 4, 5, 6), weight=0) # Make rows take minimal space
         self.grid_rowconfigure(7, weight=1) # Empty row to push elements up if needed
@@ -36,7 +37,7 @@ class VideoConverterPage(customtkinter.CTkFrame):
         # --- Widgets ---
 
         # Title
-        self.title_label = customtkinter.CTkLabel(self, text="Video to MP4 Converter", font=customtkinter.CTkFont(size=24, weight="bold"))
+        self.title_label = customtkinter.CTkLabel(self, text="Video Converter", font=customtkinter.CTkFont(size=24, weight="bold"))
         self.title_label.grid(row=0, column=0, columnspan=3, padx=20, pady=(20, 30), sticky="ew")
 
         # Input File Selection
@@ -50,7 +51,7 @@ class VideoConverterPage(customtkinter.CTkFrame):
         # Output File Selection
         self.output_label = customtkinter.CTkLabel(self, text="Output MP4 File:")
         self.output_label.grid(row=2, column=0, padx=(20, 10), pady=10, sticky="w")
-        self.output_entry = customtkinter.CTkEntry(self, placeholder_text="Output path will be set automatically...", state="readonly")
+        self.output_entry = customtkinter.CTkEntry(self, placeholder_text="Output path will be set automatically (.mp4)", state="readonly")
         self.output_entry.grid(row=2, column=1, padx=10, pady=10, sticky="ew")
         self.output_button = customtkinter.CTkButton(self, text="Save As", command=self._browse_output_file)
         self.output_button.grid(row=2, column=2, padx=(10, 20), pady=10, sticky="e")
@@ -60,7 +61,7 @@ class VideoConverterPage(customtkinter.CTkFrame):
                                                                   command=self._update_delete_original_setting)
         self.delete_original_checkbox.grid(row=3, column=0, columnspan=2, padx=20, pady=10, sticky="w")
         # Set initial state from config
-        initial_delete_original = self.config_manager.get_setting("processing_parameters.video_conversion.delete_original_after_conversion", False)
+        initial_delete_original = self.config_manager.get_setting("processing_parameters.video_conversion.delete_original_after_processing", False)
         if initial_delete_original:
             self.delete_original_checkbox.select()
         else:
@@ -81,19 +82,19 @@ class VideoConverterPage(customtkinter.CTkFrame):
 
     def _browse_input_file(self):
         """Opens a file dialog to select the input video file."""
-        filetypes = [("Video files", "*.mp4 *.avi *.mov *.mkv *.flv *.wmv *.webm *.mpg *.mpeg"),
+        filetypes = [("Video files", "*.mp4 *.mov *.avi *.mkv *.webm *.mpg *.mpeg *.wmv"),
                      ("All files", "*.*")]
         file_path_str = filedialog.askopenfilename(title="Select Input Video File", filetypes=filetypes)
         if file_path_str:
             self.input_file_path = Path(file_path_str)
             self._update_entry_text(self.input_entry, str(self.input_file_path))
-            self.logger.info(f"Input file selected: {self.input_file_path}")
+            self.logger.info(f"Input video file selected: {self.input_file_path}")
             self.app_instance.set_status(f"Selected: {self.input_file_path.name}")
             self._suggest_output_file_path()
             self._update_ui_state(True) # Enable convert button if input selected
         else:
-            self.logger.info("Input file selection cancelled.")
-            self.app_instance.set_status("Input file selection cancelled.")
+            self.logger.info("Input video file selection cancelled.")
+            self.app_instance.set_status("Input video file selection cancelled.")
             self._update_ui_state(False) # Disable if input cancelled
 
     def _suggest_output_file_path(self):
@@ -105,7 +106,7 @@ class VideoConverterPage(customtkinter.CTkFrame):
             default_output_dir = Path(default_output_dir_str)
             default_output_dir.mkdir(parents=True, exist_ok=True) # Ensure default output dir exists
 
-            output_file_name = f"{self.input_file_path.stem}_converted.mp4"
+            output_file_name = f"{self.input_file_path.stem}_converted.mp4" # Always suggest .mp4
             self.output_file_path = default_output_dir / output_file_name
 
             self._update_entry_text(self.output_entry, str(self.output_file_path))
@@ -125,20 +126,25 @@ class VideoConverterPage(customtkinter.CTkFrame):
         initial_filename = f"{self.input_file_path.stem}_converted.mp4"
 
         file_path_str = filedialog.asksaveasfilename(
-            title="Save Converted MP4 As",
+            title="Save Converted Video As",
             initialdir=initial_dir,
             initialfile=initial_filename,
-            filetypes=[("MP4 files", "*.mp4")],
-            defaultextension=".mp4"
+            filetypes=[("MP4 files", "*.mp4"), ("All files", "*.*")], # Only allow MP4
+            defaultextension=".mp4" 
         )
         if file_path_str:
             self.output_file_path = Path(file_path_str)
+            # Ensure the output has a .mp4 extension regardless of user input
+            if self.output_file_path.suffix.lower() != '.mp4':
+                self.output_file_path = self.output_file_path.with_suffix('.mp4')
+                self.logger.warning(f"Output file extension changed to '.mp4': {self.output_file_path}")
+            
             self._update_entry_text(self.output_entry, str(self.output_file_path))
-            self.logger.info(f"Output file selected: {self.output_file_path}")
+            self.logger.info(f"Output video file selected: {self.output_file_path}")
             self.app_instance.set_status(f"Output will be: {self.output_file_path.name}")
         else:
-            self.logger.info("Output file selection cancelled.")
-            self.app_instance.set_status("Output file selection cancelled.")
+            self.logger.info("Output video file selection cancelled.")
+            self.app_instance.set_status("Output video file selection cancelled.")
 
     def _update_entry_text(self, entry_widget, text: str):
         """Helper to update a readonly CTkEntry."""
@@ -148,18 +154,21 @@ class VideoConverterPage(customtkinter.CTkFrame):
         entry_widget.configure(state="readonly")
 
     def _update_delete_original_setting(self):
-        """Updates the 'delete_original_after_conversion' setting in the config."""
+        """Updates the 'delete_original_after_processing' setting in the config."""
         is_checked = self.delete_original_checkbox.get() == 1
-        self.config_manager.set_setting("processing_parameters.video_conversion.delete_original_after_conversion", is_checked)
-        self.logger.info(f"Delete original setting updated to: {is_checked}")
-        self.app_instance.set_status(f"Delete original: {is_checked}")
+        self.config_manager.set_setting("processing_parameters.video_conversion.delete_original_after_processing", is_checked)
+        self.logger.info(f"Delete original (video conversion) setting updated to: {is_checked}")
+        self.app_instance.set_status(f"Delete original (video conv): {is_checked}")
 
     def _update_progress_bar(self, progress_percentage: int):
-        print(f"DEBUG: _update_progress_bar called. self.master type: {type(self.master)}, self.master is None: {self.master is None}")
-        if self.master is None:
-            self.logger.error("Attempted to call .after() on a None master object!")
-            return # Prevent the AttributeError
-        self.master.after(1, self.__update_progress_gui, progress_percentage)
+        """
+        Callback from VideoConverter to update the GUI progress bar and label.
+        Schedules the actual GUI update on the main thread.
+        """
+        if self.master:
+            self.master.after(1, self.__update_progress_gui, progress_percentage)
+        else:
+            self.logger.error("Attempted to update GUI on a None master object in _update_progress_bar.")
 
     def __update_progress_gui(self, progress_percentage: int):
         """Actual GUI update function, called via master.after. Runs on main thread."""
@@ -167,6 +176,7 @@ class VideoConverterPage(customtkinter.CTkFrame):
         self.progress_label.configure(text=f"Progress: {progress_percentage}%")
         self.app_instance.set_status(f"Converting: {progress_percentage}%")
         self.master.update_idletasks() # Force GUI update
+
 
     def _update_ui_state(self, enable_convert_button: bool):
         """Sets the state of interactive widgets based on conversion status."""
@@ -180,7 +190,7 @@ class VideoConverterPage(customtkinter.CTkFrame):
         self.input_button.configure(state=browse_state)
         self.output_button.configure(state=browse_state)
         self.delete_original_checkbox.configure(state=browse_state)
-        # Assuming other controls like format menu would be added here later
+
 
     def _start_conversion(self):
         """
@@ -199,16 +209,16 @@ class VideoConverterPage(customtkinter.CTkFrame):
             self.app_instance.set_status("Conversion failed: No output path.", level="warning")
             return
 
-        # Double check if conversion is already running, though the state update should prevent button clicks
+        # Double check if conversion is already running
         if self.video_converter.is_converting():
-            self.app_instance.set_status("Conversion already in progress.", level="warning")
+            self.app_instance.set_status("Video conversion already in progress.", level="warning")
             return
 
         self._update_ui_state(False) # Disable UI during conversion
         self.progress_bar.set(0)
         self.progress_label.configure(text="Progress: 0%")
-        self.app_instance.set_status("Conversion started...", level="info")
-        self.logger.info("Conversion process initiated via GUI.")
+        self.app_instance.set_status("Video conversion started...", level="info")
+        self.logger.info("Video conversion initiated via GUI.")
 
         delete_original = self.delete_original_checkbox.get() == 1
 
@@ -221,7 +231,7 @@ class VideoConverterPage(customtkinter.CTkFrame):
 
     def _run_conversion_task(self, input_path: Path, output_path: Path, delete_original: bool):
         """
-        The actual conversion task to be run in a separate thread.
+        The actual video conversion task to be run in a separate thread.
         Handles calling the VideoConverter and updating the GUI with results.
         """
         success, message = self.video_converter.convert_video_to_mp4(
@@ -232,28 +242,26 @@ class VideoConverterPage(customtkinter.CTkFrame):
         )
 
         # After conversion (success or failure), schedule result handling on the main thread
-        self.master.after(0, self._handle_conversion_result, success, message)
+        if self.master:
+            self.master.after(0, self._handle_conversion_result, success, message)
+        else:
+            self.logger.error("Master is None during _run_conversion_task completion. Cannot update GUI.")
 
     def _handle_conversion_result(self, success: bool, message: str):
         """
-        Handles the result of the conversion, updating status and re-enabling UI.
+        Handles the result of the video conversion, updating status and re-enabling UI.
         Called on the main thread after conversion completes.
         """
         if success:
-            self.app_instance.history_manager.log_task(
-                "Video Conversion",
-                self.input_file_path,
-                self.output_file_path,
-                "Completed",
-                f"Conversion successful. Output saved to: {self.output_file_path.name}"
-            )
+            messagebox.showinfo("Conversion Success", f"Video converted successfully!\nOutput: {message.split(': ')[-1]}")
+            self.logger.info(f"Video conversion UI completed successfully: {message}")
+            self.progress_label.configure(text="Conversion Complete!")
+            self.progress_bar.set(1.0) # Ensure it shows 100%
         else:
-            self.app_instance.history_manager.log_task(
-                "Video Conversion",
-                self.input_file_path,
-                self.output_file_path, # Could be None if failed early
-                "Failed",
-                f"Conversion failed: {message}"
-            )
+            messagebox.showerror("Conversion Failed", f"Video conversion failed:\n{message}")
+            self.logger.error(f"Video conversion UI failed: {message}")
+            self.progress_label.configure(text="Conversion Failed!")
+            self.progress_bar.set(0) # Reset progress on failure
+
         self._update_ui_state(True) # Re-enable UI elements
         self.app_instance.set_status(message, level="info" if success else "error")

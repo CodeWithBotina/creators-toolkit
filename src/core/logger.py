@@ -1,93 +1,101 @@
 import logging
-import os
-from datetime import datetime
+from pathlib import Path
+from typing import Optional
+import sys
+
+# Global variable to hold the single instance of AppLogger
+_app_logger_instance: Optional["AppLogger"] = None
+
+class AppLoggerError(Exception):
+    """Custom exception for application logger errors."""
+    pass
 
 class AppLogger:
     """
     Manages the application's logging system.
-    Logs are written to a file and optionally to the console.
+    Implements a singleton pattern to ensure a single, consistent logger instance
+    across the entire application.
     """
     _instance = None
+    _initialized = False
 
     def __new__(cls, *args, **kwargs):
+        """Ensures that only one instance of AppLogger exists (Singleton pattern)."""
         if cls._instance is None:
             cls._instance = super(AppLogger, cls).__new__(cls)
-            cls._instance._initialized = False
         return cls._instance
 
-    def __init__(self, log_dir="logs", log_level=logging.INFO):
+    def __init__(self, log_dir: str = "logs", log_level: int = logging.INFO):
+        """
+        Initializes the AppLogger. This method sets up the logger, file handler,
+        and formatter. It is designed to be called once at application startup.
+        
+        Args:
+            log_dir (str): The absolute path to the directory where log files should be stored.
+                           This path should be provided by the ConfigManager, which gets it from main.py.
+            log_level (int): The minimum logging level to capture (e.g., logging.INFO, logging.DEBUG).
+        """
         if self._initialized:
             return
 
-        self.log_dir = log_dir
-        self.log_level = log_level
-        self._setup_logging()
-        self._initialized = True
+        self.log_dir = Path(log_dir)
+        self.log_dir.mkdir(parents=True, exist_ok=True) # Ensure the log directory exists
 
-    def _setup_logging(self):
-        """
-        Configures the logging handlers and formatters.
-        """
-        os.makedirs(self.log_dir, exist_ok=True)
-
-        # Get current date for log file naming
-        log_file_name = datetime.now().strftime("app_%Y-%m-%d.log")
-        log_file_path = os.path.join(self.log_dir, log_file_name)
-
-        # Basic configuration for the root logger
-        # This will set up default handlers if not already configured
-        logging.basicConfig(
-            level=self.log_level,
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-            handlers=[
-                logging.FileHandler(log_file_path, encoding='utf-8'),
-                # Optional: Console handler for development/debugging
-                logging.StreamHandler()
-            ]
-        )
-
-        # Prevent duplicate log messages if basicConfig is called multiple times
-        # or if other modules also set up handlers
-        for handler in logging.root.handlers:
-            if isinstance(handler, logging.StreamHandler):
-                handler.setLevel(logging.INFO) # Set default console level to INFO
-            if isinstance(handler, logging.FileHandler):
-                handler.setLevel(self.log_level) # File handler uses configured level
-
-        # Get the main application logger
         self.logger = logging.getLogger("CreatorToolkit")
-        self.logger.setLevel(self.log_level)
+        self.logger.setLevel(log_level)
+        self.logger.propagate = False # Prevent logs from going to the root logger
 
-        # Ensure the main logger does not propagate to root logger if root is also configured
-        # This prevents duplicate messages if basicConfig is already running a StreamHandler
-        self.logger.propagate = False
+        # Clear existing handlers to prevent duplicate logs on re-initialization (e.g., during tests)
+        if self.logger.handlers:
+            for handler in self.logger.handlers:
+                self.logger.removeHandler(handler)
 
-        # Add handlers explicitly if basicConfig didn't cover our specific needs
-        # (This block is mostly for safety/advanced control, basicConfig usually suffices)
-        if not any(isinstance(h, logging.FileHandler) and h.baseFilename == os.path.abspath(log_file_path) for h in self.logger.handlers):
+        # File Handler: Logs all messages to a file
+        log_file_path = self.log_dir / "application.log"
+        try:
             file_handler = logging.FileHandler(log_file_path, encoding='utf-8')
-            file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-            file_handler.setLevel(self.log_level)
+            file_handler.setLevel(log_level)
+            # Format: Timestamp - LoggerName - LevelName - Message
+            file_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            file_handler.setFormatter(file_formatter)
             self.logger.addHandler(file_handler)
+        except Exception as e:
+            # Fallback to console if file logging fails (e.g., permissions)
+            print(f"ERROR: Could not set up file logger at {log_file_path}: {e}")
+            self.logger.addHandler(logging.StreamHandler(sys.stdout)) # Add a basic console handler
+            self.logger.error(f"Failed to set up file logger at {log_file_path}. Logging to console instead.", exc_info=True)
+            raise AppLoggerError(f"Failed to set up file logger: {e}") # Re-raise to indicate critical error
 
-        if not any(isinstance(h, logging.StreamHandler) for h in self.logger.handlers):
-            stream_handler = logging.StreamHandler()
-            stream_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-            stream_handler.setLevel(logging.INFO) # Default to INFO for console
-            self.logger.addHandler(stream_handler)
+        # Console Handler: Logs INFO and above to console (optional, can be removed in final executable)
+        # We might want different levels for console vs. file. For now, matching for simplicity.
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setLevel(log_level)
+        console_formatter = logging.Formatter('%(levelname)s - %(message)s')
+        console_handler.setFormatter(console_formatter)
+        self.logger.addHandler(console_handler)
 
-    def get_logger(self):
+        self._initialized = True
+        self.logger.info("AppLogger initialized successfully.")
+
+    def get_logger(self) -> logging.Logger:
         """
-        Returns the configured logger instance.
+        Returns the configured logging.Logger instance.
         """
         return self.logger
 
-# Global instance for easy access throughout the application
-# Initialize with default log directory and level
-app_logger_instance = AppLogger(log_dir="logs", log_level=logging.INFO)
-
-def get_application_logger():
+def get_application_logger() -> logging.Logger:
     """
-    Convenience function to get the global logger instance.
+    Convenience function to get the global AppLogger's logging.Logger instance.
+    Ensures the AppLogger is initialized before returning its logger.
+    This function should be called after AppLogger() has been explicitly
+    instantiated once in main.py.
     """
-    return app_logger_instance.get_logger()
+    global _app_logger_instance
+    if _app_logger_instance is None:
+        # This case should ideally not happen if main.py initializes AppLogger first.
+        # For robustness, we could create a default instance, but it's better to
+        # ensure proper initialization at the application's entry point.
+        # Log a warning if this is called before explicit initialization.
+        print("WARNING: get_application_logger() called before AppLogger was explicitly initialized. Using default setup.")
+        _app_logger_instance = AppLogger() # Initialize with defaults if called prematurely
+    return _app_logger_instance.get_logger()

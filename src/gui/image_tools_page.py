@@ -3,6 +3,7 @@ from tkinter import filedialog, messagebox
 import threading
 from pathlib import Path
 import logging
+from typing import Optional # Import Optional for type hinting
 
 # Import core and module components
 from src.core.logger import get_application_logger
@@ -21,8 +22,8 @@ class ImageToolsPage(customtkinter.CTkFrame):
         self.app_instance = app_instance # Reference to the main App class for status updates
         self.image_bg_remover = ImageBgRemover() # Instantiate the backend logic
 
-        self.input_file_path = None
-        self.output_file_path = None # Store the full output path suggested/chosen
+        self.input_file_path: Optional[Path] = None
+        self.output_file_path: Optional[Path] = None # Store the full output path suggested/chosen
 
         self.logger.info("Initializing ImageToolsPage UI.")
 
@@ -270,22 +271,15 @@ class ImageToolsPage(customtkinter.CTkFrame):
         Called on the main thread after processing completes.
         """
         if success:
-            self.app_instance.history_manager.log_task(
-                "Image Processing",
-                self.input_file_path,
-                self.output_file_path,
-                "Completed",
-                f"Image processed successfully. Output saved to: {self.output_file_path.name}",
-                details={"operation_type": "Background Removal/Resizing"} # Example details
-            )
-            self.app_instance.set_status(f"Image processing complete! Output saved to: {self.output_file_path.name}")
+            messagebox.showinfo("Processing Success", f"Image processed successfully!\nOutput: {message.split(': ')[-1]}")
+            self.logger.info(f"Image processing UI completed successfully: {message}")
+            self.progress_label.configure(text="Processing Complete!")
+            self.progress_bar.set(1.0) # Ensure it shows 100%
         else:
-            self.app_instance.history_manager.log_task(
-                "Image Processing",
-                self.input_file_path,
-                self.output_file_path,
-                "Failed",
-                f"Image processing failed: {message}"
-            )
-            self.app_instance.set_status(f"Image processing failed: {message}", level="error")
+            messagebox.showerror("Processing Failed", f"Image processing failed:\n{message}")
+            self.logger.error(f"Image processing UI failed: {message}")
+            self.progress_label.configure(text="Processing Failed!")
+            self.progress_bar.set(0) # Reset progress on failure
+
         self._update_ui_state(True) # Re-enable UI elements
+        self.app_instance.set_status(message, level="info" if success else "error")

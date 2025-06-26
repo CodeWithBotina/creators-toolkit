@@ -6,9 +6,7 @@ import numpy as np
 from pydub import AudioSegment
 from pydub.silence import split_on_silence
 import noisereduce as nr
-import librosa
-import soundfile as sf
-from scipy.signal import butter, sosfiltfilt
+# Removed unused imports: librosa, soundfile
 import webrtcvad # For Voice Activity Detection
 
 from src.core.logger import get_application_logger
@@ -35,7 +33,7 @@ class AudioProcessor:
 
         self.logger.info("AudioProcessor initialized.")
 
-    def _update_progress(self, current_step, total_steps, message="", level="info"):
+    def _update_progress(self, current_step: int, total_steps: int, message: str = "", level: str = "info"):
         """
         Internal helper to update progress and log messages.
         Converts step-based progress to a 0-100 integer percentage.
@@ -88,8 +86,8 @@ class AudioProcessor:
             # Using pydub to load for broad format support
             audio_segment = AudioSegment.from_file(input_filepath)
             
-            # Convert to numpy array for noisereduce and librosa, using 16-bit PCM for VAD
-            # Ensure target sample rate (sr) matches what noisereduce/librosa expect and VAD supports (8k, 16k, 32k, 48k)
+            # Convert to numpy array for noisereduce, using 16-bit PCM for VAD
+            # Ensure target sample rate (sr) matches what noisereduce expects and VAD supports (8k, 16k, 32k, 48k)
             target_sr = self.config.get_setting("processing_parameters.audio_enhancement.sample_rate", 48000)
             
             if audio_segment.frame_rate != target_sr:
@@ -108,10 +106,6 @@ class AudioProcessor:
             self.logger.info(f"Applying noise reduction with strength: {noise_strength}")
             self._update_progress(20, 100, "Applying noise reduction...")
 
-            # Use noise gate or simple noise reduction. `nr.reduce_noise` is robust.
-            # `y_noise` and `sr_noise` can be estimated from silent segments or full audio.
-            # For simplicity and speed, let's assume noise is spread throughout for now.
-            # A more advanced version might identify silent parts first.
             reduced_noise_audio = nr.reduce_noise(
                 y=raw_audio_np, 
                 sr=target_sr, 
@@ -120,8 +114,6 @@ class AudioProcessor:
             )
 
             # Step 3: Voice Activity Detection (VAD) and Silence Removal (Optional, based on config)
-            # This is more for segmenting, but can also help clean by removing long silences.
-            # If `remove_silence` is enabled, use it.
             remove_silence = self.config.get_setting("processing_parameters.audio_enhancement.remove_silence", False)
             if remove_silence:
                 self.logger.info("Applying Voice Activity Detection (VAD) to remove silence.")
@@ -136,13 +128,13 @@ class AudioProcessor:
                 )
 
                 min_silence_len = self.config.get_setting("processing_parameters.audio_enhancement.min_silence_len_ms", 1000)
-                silence_thresh_db = self.config.get_setting("processing_parameters.audio_enhancement.silence_thresh_db", -35)
+                silence_threshold_db = self.config.get_setting("processing_parameters.audio_enhancement.silence_thresh_db", -35)
 
                 audio_chunks = split_on_silence(
                     clean_audio_segment,
                     min_silence_len=min_silence_len,
-                    silence_thresh=silence_thresh_db,
-                    keep_silence=200 # Keep a small amount of silence at chunk edges
+                    silence_thresh=silence_threshold_db,
+                    keep_silence=200 # Keep a small buffer around speech
                 )
                 if not audio_chunks:
                     self.logger.warning("No audio chunks detected after silence removal. Output will be empty.")
@@ -177,7 +169,7 @@ class AudioProcessor:
             self.logger.info(f"Saving processed audio to: {output_filepath}")
             self._update_progress(90, 100, "Saving processed audio...")
             
-            # Ensure the output format is compatible with soundfile and the desired extension
+            # Ensure the output format is compatible with pydub and the desired extension
             output_format = output_filepath.suffix[1:].lower() # Get extension without dot, e.g., 'flac' or 'wav'
             if output_format not in ['flac', 'wav', 'mp3', 'ogg', 'aac']: # Supported formats by pydub for export
                 # Default to FLAC for high quality if unknown or unsupported

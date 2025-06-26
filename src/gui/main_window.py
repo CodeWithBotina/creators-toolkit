@@ -4,8 +4,7 @@ import logging
 import sys
 from pathlib import Path
 from tkinter import messagebox
-import time
-import webbrowser # For opening external links
+import time # For potential debugging delays
 
 # Import core modules
 from src.core.logger import get_application_logger
@@ -21,9 +20,6 @@ from src.gui.video_enhancement_page import VideoEnhancementPage
 from src.gui.video_bg_removal_page import VideoBgRemovalPage
 from src.gui.social_media_post_page import SocialMediaPostPage
 from src.gui.history_page import HistoryPage
-from src.gui.about_page import AboutPage # NEW: Import AboutPage
-from src.gui.help_page import HelpPage # NEW: Import HelpPage
-
 
 class MainWindow(customtkinter.CTk):
     """
@@ -36,188 +32,128 @@ class MainWindow(customtkinter.CTk):
 
         self.logger = get_application_logger()
         self.config_manager = get_application_config()
-        self.history_manager = get_application_history_manager()
+        self.history_manager = get_application_history_manager() # Access the global history manager
 
         self.title("Creator's Toolkit for Windows 11")
         self.geometry(f"{1100}x{700}")
+        self.minsize(900, 600) # Set a minimum window size for responsiveness
 
-        # Set application icon (for window and taskbar)
-        # Ensure 'assets/icon.ico' exists. If not, the window will use a default icon.
-        icon_path = Path("assets/icon.ico")
-        if icon_path.exists():
-            try:
-                self.iconbitmap(str(icon_path))
-                self.logger.info(f"Application icon set from: {icon_path}")
-            except Exception as e:
-                self.logger.warning(f"Failed to set application icon from {icon_path}: {e}")
-        else:
-            self.logger.warning(f"Application icon file not found at: {icon_path}. Window will use default icon.")
+        # Configure grid layout for the main window
+        self.grid_rowconfigure(0, weight=1)  # Content area
+        self.grid_columnconfigure(1, weight=1) # Content area
 
-        # Configure grid layout (2x2 grid: top menu bar, navigation frame, content frame, status bar)
-        self.grid_rowconfigure(0, weight=0) # Top menu bar row
-        self.grid_rowconfigure(1, weight=1) # Main content row (nav + main_content)
-        self.grid_rowconfigure(2, weight=0) # Status bar row
-        self.grid_columnconfigure(0, weight=0) # Navigation frame column
-        self.grid_columnconfigure(1, weight=1) # Main content column
+        # --- Create Sidebar Frame with Navigation ---
+        self.sidebar_frame = customtkinter.CTkFrame(self, width=140, corner_radius=0)
+        self.sidebar_frame.grid(row=0, column=0, rowspan=4, sticky="nsew")
+        self.sidebar_frame.grid_rowconfigure(7, weight=1) # Push settings to bottom
 
-        # --- Create Top Menu Bar ---
-        self.top_menu_frame = customtkinter.CTkFrame(self, corner_radius=0, height=40, fg_color=("gray75", "gray25"))
-        self.top_menu_frame.grid(row=0, column=0, columnspan=2, sticky="ew") # Span across both columns
-        self.top_menu_frame.grid_columnconfigure((0,1,2,3,4), weight=1) # Evenly distribute menu items
+        self.logo_label = customtkinter.CTkLabel(self.sidebar_frame, text="Creator's Toolkit",
+                                                font=customtkinter.CTkFont(size=20, weight="bold"))
+        self.logo_label.grid(row=0, column=0, padx=20, pady=(20, 10))
 
-        self.about_button_top = customtkinter.CTkButton(self.top_menu_frame, text="About",
-                                                        font=customtkinter.CTkFont(size=14, weight="bold"),
-                                                        fg_color="transparent", hover_color=("gray60", "gray30"),
-                                                        command=self._show_about_page)
-        self.about_button_top.grid(row=0, column=0, padx=5, pady=5, sticky="w")
+        # Navigation Buttons - Added sticky="ew" for horizontal expansion
+        self.dashboard_button = customtkinter.CTkButton(self.sidebar_frame, text="Dashboard",
+                                                        command=self.dashboard_button_event)
+        self.dashboard_button.grid(row=1, column=0, padx=20, pady=10, sticky="ew")
 
-        self.help_button_top = customtkinter.CTkButton(self.top_menu_frame, text="Help",
-                                                       font=customtkinter.CTkFont(size=14, weight="bold"),
-                                                       fg_color="transparent", hover_color=("gray60", "gray30"),
-                                                       command=self._show_help_page)
-        self.help_button_top.grid(row=0, column=1, padx=5, pady=5, sticky="w")
+        self.video_converter_button = customtkinter.CTkButton(self.sidebar_frame, text="Video Converter",
+                                                              command=self.video_converter_button_event)
+        self.video_converter_button.grid(row=2, column=0, padx=20, pady=10, sticky="ew")
+
+        self.audio_enhancement_button = customtkinter.CTkButton(self.sidebar_frame, text="Audio Enhancement",
+                                                                 command=self.audio_enhancement_button_event)
+        self.audio_enhancement_button.grid(row=3, column=0, padx=20, pady=10, sticky="ew")
+
+        self.image_tools_button = customtkinter.CTkButton(self.sidebar_frame, text="Image Tools",
+                                                           command=self.image_tools_button_event)
+        self.image_tools_button.grid(row=4, column=0, padx=20, pady=10, sticky="ew")
+
+        self.video_enhancement_button = customtkinter.CTkButton(self.sidebar_frame, text="Video Enhancement",
+                                                                 command=self.video_enhancement_button_event)
+        self.video_enhancement_button.grid(row=5, column=0, padx=20, pady=10, sticky="ew")
         
-        self.docs_button_top = customtkinter.CTkButton(self.top_menu_frame, text="Docs",
-                                                       font=customtkinter.CTkFont(size=14, weight="bold"),
-                                                       fg_color="transparent", hover_color=("gray60", "gray30"),
-                                                       command=self._open_docs)
-        self.docs_button_top.grid(row=0, column=2, padx=5, pady=5, sticky="w")
+        self.video_bg_removal_button = customtkinter.CTkButton(self.sidebar_frame, text="Video Background Removal",
+                                                               command=self.video_bg_removal_button_event)
+        self.video_bg_removal_button.grid(row=6, column=0, padx=20, pady=10, sticky="ew")
+
+        self.social_media_post_button = customtkinter.CTkButton(self.sidebar_frame, text="Social Media Post",
+                                                                 command=self.social_media_post_button_event)
+        self.social_media_post_button.grid(row=7, column=0, padx=20, pady=10, sticky="ew")
+
+        self.history_button = customtkinter.CTkButton(self.sidebar_frame, text="History",
+                                                      command=self.history_button_event)
+        self.history_button.grid(row=8, column=0, padx=20, pady=10, sticky="ew")
 
 
-        # --- Create Navigation Frame (moved to row 1) ---
-        self.navigation_frame = customtkinter.CTkFrame(self, corner_radius=0)
-        self.navigation_frame.grid(row=1, column=0, sticky="nsew") # Changed row to 1
-        
-        # Configure navigation frame rows for buttons and appearance menu
-        self.navigation_frame.grid_rowconfigure((1, 2, 3), weight=1) # Rows for Dashboard, History
-        self.navigation_frame.grid_rowconfigure(4, weight=0) # Row for appearance menu (fixed size)
+        # Appearance Mode Settings (at the bottom of sidebar)
+        self.appearance_mode_label = customtkinter.CTkLabel(self.sidebar_frame, text="Appearance Mode:", anchor="w")
+        self.appearance_mode_label.grid(row=9, column=0, padx=20, pady=(10, 0), sticky="sw")
+        self.appearance_mode_optionemenu = customtkinter.CTkOptionMenu(self.sidebar_frame, 
+                                                                       values=["Light", "Dark", "System"],
+                                                                       command=self.change_appearance_mode_event)
+        self.appearance_mode_optionemenu.grid(row=10, column=0, padx=20, pady=(0, 20), sticky="s")
+        # Set initial appearance mode based on config
+        initial_appearance_mode = self.config_manager.get_setting("app_settings.appearance_mode", "System")
+        self.appearance_mode_optionemenu.set(initial_appearance_mode)
 
-        self.navigation_frame_label = customtkinter.CTkLabel(self.navigation_frame,
-                                                            text="Creator's Toolkit", # UI text in English
-                                                            compound="left",
-                                                            font=customtkinter.CTkFont(size=18, weight="bold"))
-        self.navigation_frame_label.grid(row=0, column=0, padx=20, pady=20)
-
-        # Navigation Buttons
-        button_padx = 15
-        button_pady = 5
-        
-        self.dashboard_button = customtkinter.CTkButton(self.navigation_frame,
-                                                       corner_radius=0,
-                                                       height=40,
-                                                       text="Dashboard", # UI text in English
-                                                       font=customtkinter.CTkFont(size=15),
-                                                       fg_color="transparent",
-                                                       text_color=("gray10", "gray90"),
-                                                       hover_color=("gray70", "gray30"),
-                                                       anchor="w",
-                                                       command=self.dashboard_button_event)
-        self.dashboard_button.grid(row=1, column=0, sticky="ew", padx=button_padx, pady=button_pady)
-
-        self.history_button = customtkinter.CTkButton(self.navigation_frame,
-                                                    corner_radius=0,
-                                                    height=40,
-                                                    text="History", # UI text in English
-                                                    font=customtkinter.CTkFont(size=15),
-                                                    fg_color="transparent",
-                                                    text_color=("gray10", "gray90"),
-                                                    hover_color=("gray70", "gray30"),
-                                                    anchor="w",
-                                                    command=self.history_button_event)
-        self.history_button.grid(row=2, column=0, sticky="ew", padx=button_padx, pady=button_pady)
-
-        # Appearance Mode Control
-        self.appearance_mode_menu = customtkinter.CTkOptionMenu(self.navigation_frame,
-                                                                values=["System", "Light", "Dark"],
-                                                                command=self.change_appearance_mode_event)
-        self.appearance_mode_menu.grid(row=4, column=0, padx=20, pady=20, sticky="s")
-
-        # --- Create Main Content Frame (where pages are displayed) (moved to row 1, column 1) ---
-        self.main_content_container = customtkinter.CTkFrame(self, corner_radius=0, fg_color="transparent")
-        self.main_content_container.grid(row=1, column=1, sticky="nsew", padx=(15, 20), pady=(15, 10)) # Changed row to 1
-        self.main_content_container.grid_columnconfigure(0, weight=1)
-        self.main_content_container.grid_rowconfigure(0, weight=1)
-
-        # --- Create Status Bar (moved to row 2) ---
-        # This MUST be created before any pages are initialized if they try to use it
-        self.status_bar = customtkinter.CTkLabel(self, text="Application ready.", # UI text in English
+        # --- Status Bar (Moved to be initialized earlier) ---
+        # This needs to be created before any pages might try to update it.
+        self.status_bar = customtkinter.CTkLabel(self, text="Application Ready", 
                                                 font=customtkinter.CTkFont(size=12),
-                                                anchor="w",
-                                                padx=15,
-                                                pady=8,
-                                                fg_color="gray20",
-                                                text_color="gray80",
-                                                corner_radius=5)
-        self.status_bar.grid(row=2, column=0, columnspan=2, sticky="ew", padx=10, pady=5) # Changed row to 2
+                                                anchor="w", fg_color=customtkinter.ThemeManager.theme["CTkFrame"]["fg_color"]) # Consistent background
+        self.status_bar.grid(row=1, column=0, columnspan=2, padx=0, pady=0, sticky="ew") # Spans across sidebar and content
+        self.set_status("Application ready.") # Set initial status bar message
 
-        self.pages = {} # Dictionary to hold all page instances
-        self.current_page = None
 
-        self._create_pages() # Initialize all content pages
-        self.show_page("dashboard") # Set initial selected page to Dashboard
+        # --- Create Main Content Frame and Pages ---
+        self.content_frame = customtkinter.CTkFrame(self, corner_radius=0, fg_color="transparent")
+        # Note: The status bar is now at grid row 1. Content frame must be at row 0.
+        self.content_frame.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
+        self.content_frame.grid_rowconfigure(0, weight=1)
+        self.content_frame.grid_columnconfigure(0, weight=1)
 
-        self.set_status("Application ready. Welcome!") # UI text in English
-        self.logger.info("Main window UI initialized.")
+        # Dictionary to hold page instances
+        self.pages = {}
+        self._create_pages() # Call method to create all page instances
+
+        # Set default page to Dashboard
+        self.show_page("dashboard")
 
     def _create_pages(self):
-        """Initializes all the application's content pages and stores them."""
-        # Pages will receive a reference to this MainWindow instance for status updates and navigation
-        self.pages["dashboard"] = DashboardPage(self.main_content_container, self)
-        self.pages["video_converter"] = VideoConverterPage(self.main_content_container, self)
-        self.pages["social_media_post"] = SocialMediaPostPage(self.main_content_container, self)
-        self.pages["video_enhancement"] = VideoEnhancementPage(self.main_content_container, self)
-        self.pages["video_bg_removal"] = VideoBgRemovalPage(self.main_content_container, self)
-        self.pages["audio_enhancement"] = AudioEnhancementPage(self.main_content_container, self)
-        self.pages["image_tools"] = ImageToolsPage(self.main_content_container, self)
-        self.pages["history"] = HistoryPage(self.main_content_container, self)
-        self.pages["about"] = AboutPage(self.main_content_container, self) # NEW: About Page
-        self.pages["help"] = HelpPage(self.main_content_container, self) # NEW: Help Page
-
-        # Grid all pages but hide them initially
-        for page_name, page_instance in self.pages.items():
-            page_instance.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
-            page_instance.grid_remove() # Hide all initially
+        """Initializes all page instances and stores them in a dictionary."""
+        self.pages["dashboard"] = DashboardPage(self.content_frame, self)
+        self.pages["video_converter"] = VideoConverterPage(self.content_frame, self)
+        self.pages["audio_enhancement"] = AudioEnhancementPage(self.content_frame, self)
+        self.pages["image_tools"] = ImageToolsPage(self.content_frame, self)
+        self.pages["video_enhancement"] = VideoEnhancementPage(self.content_frame, self)
+        self.pages["video_bg_removal"] = VideoBgRemovalPage(self.content_frame, self)
+        self.pages["social_media_post"] = SocialMediaPostPage(self.content_frame, self)
+        self.pages["history"] = HistoryPage(self.content_frame, self)
+        self.logger.info("All application pages instantiated.")
 
     def show_page(self, page_name: str):
-        """Displays the specified page and hides others, updating the navigation highlight."""
-        if page_name not in self.pages:
-            self.logger.error(f"Attempted to show unknown page: {page_name}")
-            self.set_status(f"Error: Page '{page_name}' not found.", level="error") # UI text in English
-            return
-
-        if self.current_page:
-            self.current_page.grid_remove() # Hide current page
-
-        self.current_page = self.pages[page_name]
-        self.current_page.grid() # Show the new page
-        self.logger.info(f"Navigated to page: {page_name}")
-
-        self._update_navigation_button_highlight(page_name) # Update button highlight
-
-    def _update_navigation_button_highlight(self, active_page_name: str):
-        """Highlights the active navigation button based on the current page."""
-        # Reset all main navigation button colors (Dashboard, History)
-        for button in [self.dashboard_button, self.history_button]:
-            button.configure(fg_color="transparent")
+        """
+        Displays the specified page and hides others.
         
-        # Reset all top menu button colors
-        for button in [self.about_button_top, self.help_button_top, self.docs_button_top]:
-            button.configure(fg_color="transparent")
+        Args:
+            page_name (str): The name of the page to show (key in self.pages).
+        """
+        # Hide all pages first
+        for page in self.pages.values():
+            page.grid_forget() # Remove from grid layout
 
-        # Set active button color for main navigation
-        if active_page_name == "dashboard":
-            self.dashboard_button.configure(fg_color=customtkinter.ThemeManager.theme["CTkOptionMenu"]["button_color"])
-        elif active_page_name == "history":
-            self.history_button.configure(fg_color=customtkinter.ThemeManager.theme["CTkOptionMenu"]["button_color"])
-        # No need to highlight other buttons directly in the nav frame
-        # as they are navigated via the dashboard.
-
-        # Set active button color for top menu (if it's an "internal" page)
-        if active_page_name == "about":
-            self.about_button_top.configure(fg_color=customtkinter.ThemeManager.theme["CTkOptionMenu"]["button_color"])
-        elif active_page_name == "help":
-            self.help_button_top.configure(fg_color=customtkinter.ThemeManager.theme["CTkOptionMenu"]["button_color"])
-
+        # Display the requested page
+        page_to_show = self.pages.get(page_name)
+        if page_to_show:
+            page_to_show.grid(row=0, column=0, sticky="nsew") # Place in content frame
+            self.logger.debug(f"Displayed page: {page_name}")
+            # If the page has a refresh method (e.g., history page), call it
+            if hasattr(page_to_show, 'refresh_page_content'):
+                self.logger.debug(f"Refreshing content for {page_name}...")
+                page_to_show.refresh_page_content()
+        else:
+            self.logger.error(f"Attempted to show unknown page: {page_name}")
+            self.set_status(f"Error: Page '{page_name}' not found.", level="error")
 
     def set_status(self, message: str, level: str = "info"):
         """Updates the status bar message and logs it."""
@@ -235,42 +171,54 @@ class MainWindow(customtkinter.CTk):
     def dashboard_button_event(self):
         """Event handler for the Dashboard button."""
         self.show_page("dashboard")
-        self.set_status("Dashboard selected.") # UI text in English
+        self.set_status("Dashboard selected.")
         self.logger.debug("Dashboard button clicked.")
+
+    def video_converter_button_event(self):
+        """Event handler for the Video Converter button."""
+        self.show_page("video_converter")
+        self.set_status("Video Converter selected.")
+        self.logger.debug("Video Converter button clicked.")
+
+    def audio_enhancement_button_event(self):
+        """Event handler for the Audio Enhancement button."""
+        self.show_page("audio_enhancement")
+        self.set_status("Audio Enhancement selected.")
+        self.logger.debug("Audio Enhancement button clicked.")
+
+    def image_tools_button_event(self):
+        """Event handler for the Image Tools button."""
+        self.show_page("image_tools")
+        self.set_status("Image Tools selected.")
+        self.logger.debug("Image Tools button clicked.")
+
+    def video_enhancement_button_event(self):
+        """Event handler for the Video Enhancement button."""
+        self.show_page("video_enhancement")
+        self.set_status("Video Enhancement selected.")
+        self.logger.debug("Video Enhancement button clicked.")
+
+    def video_bg_removal_button_event(self):
+        """Event handler for the Video Background Removal button."""
+        self.show_page("video_bg_removal")
+        self.set_status("Video Background Removal selected.")
+        self.logger.debug("Video Background Removal button clicked.")
+
+    def social_media_post_button_event(self):
+        """Event handler for the Social Media Post button."""
+        self.show_page("social_media_post")
+        self.set_status("Social Media Post section selected.")
+        self.logger.debug("Social Media Post button clicked.")
 
     def history_button_event(self):
         """Event handler for the History button."""
         self.show_page("history")
-        self.set_status("History section selected.") # UI text in English
+        self.set_status("History section selected.")
         self.logger.debug("History button clicked.")
 
     def change_appearance_mode_event(self, new_appearance_mode: str):
         """Handles changing the CustomTkinter appearance mode."""
         customtkinter.set_appearance_mode(new_appearance_mode)
         self.config_manager.set_setting("app_settings.appearance_mode", new_appearance_mode)
-        self.set_status(f"Appearance mode changed to {new_appearance_mode}.") # UI text in English
-        self.logger.info(f"Appearance mode changed to: {new_appearance_mode}")
-
-    # --- Top Menu Bar Event Handlers ---
-    def _show_about_page(self):
-        """Displays the About page."""
-        self.show_page("about")
-        self.set_status("About section displayed.")
-        self.logger.debug("About button clicked.")
-
-    def _show_help_page(self):
-        """Displays the Help page."""
-        self.show_page("help")
-        self.set_status("Help section displayed.")
-        self.logger.debug("Help button clicked.")
-
-    def _open_docs(self):
-        """Opens the GitHub documentation link in the default browser."""
-        docs_url = "https://github.com/CodeWithBotina/creators-toolkit"
-        try:
-            webbrowser.open_new_tab(docs_url)
-            self.set_status(f"Opening documentation: {docs_url}")
-            self.logger.info(f"Opened docs link: {docs_url}")
-        except Exception as e:
-            self.set_status(f"Failed to open documentation link: {e}", level="error")
-            self.logger.error(f"Error opening docs link {docs_url}: {e}", exc_info=True)
+        self.set_status(f"Appearance mode changed to {new_appearance_mode}.")
+        self.logger.debug(f"Appearance mode changed to: {new_appearance_mode}")

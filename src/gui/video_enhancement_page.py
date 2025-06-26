@@ -3,7 +3,7 @@ from tkinter import filedialog, messagebox
 import threading
 from pathlib import Path
 import logging
-from typing import Dict, Any # Import Dict and Any for type hinting
+from typing import Dict, Any, Optional # Import Dict, Any, Optional for type hinting
 
 # Import core and module components
 from src.core.logger import get_application_logger
@@ -22,8 +22,8 @@ class VideoEnhancementPage(customtkinter.CTkFrame):
         self.app_instance = app_instance # Reference to the main App class for status updates
         self.video_enhancer = VideoEnhancer() # Instantiate the backend logic
 
-        self.input_file_path = None
-        self.output_file_path = None # Store the full output path suggested/chosen
+        self.input_file_path: Optional[Path] = None
+        self.output_file_path: Optional[Path] = None # Store the full output path suggested/chosen
 
         self.logger.info("Initializing VideoEnhancementPage UI.")
 
@@ -408,23 +408,15 @@ class VideoEnhancementPage(customtkinter.CTkFrame):
         Called on the main thread after enhancement completes.
         """
         if success:
-            self.app_instance.history_manager.log_task(
-                "Video Enhancement",
-                self.input_file_path,
-                self.output_file_path,
-                "Completed",
-                f"Video enhanced successfully. Output saved to: {self.output_file_path.name}",
-                details={"denoise_strength": self.denoise_slider.get(), "sharpen_strength": self.sharpen_slider.get()} # Example details
-            )
-            self.app_instance.set_status(f"Video enhancement complete! Output saved to: {self.output_file_path.name}")
+            messagebox.showinfo("Enhancement Success", f"Video enhanced successfully!\nOutput: {message.split(': ')[-1]}")
+            self.logger.info(f"Video enhancement UI completed successfully: {message}")
+            self.progress_label.configure(text="Enhancement Complete!")
+            self.progress_bar.set(1.0) # Ensure it shows 100%
         else:
-            self.app_instance.history_manager.log_task(
-                "Video Enhancement",
-                self.input_file_path,
-                self.output_file_path,
-                "Failed",
-                f"Video enhancement failed: {message}"
-            )
-            self.app_instance.set_status(f"Video enhancement failed: {message}", level="error")
+            messagebox.showerror("Enhancement Failed", f"Video enhancement failed:\n{message}")
+            self.logger.error(f"Video enhancement UI failed: {message}")
+            self.progress_label.configure(text="Enhancement Failed!")
+            self.progress_bar.set(0) # Reset progress on failure
 
         self._update_ui_state(True) # Re-enable UI elements
+        self.app_instance.set_status(message, level="info" if success else "error")
